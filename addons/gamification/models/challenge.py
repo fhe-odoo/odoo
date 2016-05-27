@@ -125,13 +125,13 @@ class gamification_challenge(osv.Model):
                 ('monthly', 'Monthly'),
                 ('yearly', 'Yearly')
             ],
-            string='Periodicity',
+            string='Frequency',
             help='Period of automatic goal assigment. If none is selected, should be launched manually.',
             required=True),
         'start_date': fields.date('Start Date',
-            help="The day a new challenge will be automatically started. If no periodicity is set, will use this date as the goal start date."),
+            help="The day a new challenge will be automatically started. If no frequency is set, will use this date as the goal start date."),
         'end_date': fields.date('End Date',
-            help="The day a new challenge will be automatically closed. If no periodicity is set, will use this date as the goal end date."),
+            help="The day a new challenge will be automatically closed. If no frequency is set, will use this date as the goal end date."),
 
         'invited_user_ids': fields.many2many('res.users', 'gamification_invited_user_ids_rel',
             string="Suggest to users"),
@@ -394,7 +394,7 @@ class gamification_challenge(osv.Model):
             (start_date, end_date) = start_end_date_for_period(challenge.period)
             to_update = []
 
-            # if no periodicity, use challenge dates
+            # if no frequency, use challenge dates
             if not start_date and challenge.start_date:
                 start_date = challenge.start_date
             if not end_date and challenge.end_date:
@@ -696,8 +696,8 @@ class gamification_challenge(osv.Model):
 
         If a reward was selected, grant it to the correct users.
         Rewards granted at:
-            - the end date for a challenge with no periodicity
-            - the end of a period for challenge with periodicity
+            - the end date for a challenge with no frequency
+            - the end of a period for challenge with frequency
             - when a challenge is manually closed
         (if no end date, a running challenge is never rewarded)
         """
