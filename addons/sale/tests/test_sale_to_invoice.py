@@ -1,23 +1,5 @@
 # -*- coding: utf-8 -*-
-##############################################################################
-#
-#    OpenERP, Open Source Business Applications
-#    Copyright (c) 2013-TODAY OpenERP S.A. <http://www.openerp.com>
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as
-#    published by the Free Software Foundation, either version 3 of the
-#    License, or (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU Affero General Public License for more details.
-#
-#    You should have received a copy of the GNU Affero General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-##############################################################################
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from openerp.addons.mail.tests.common import TestMail
 from openerp.tools import mute_logger
@@ -26,82 +8,65 @@ from datetime import datetime
 
 class TestSale(TestMail):
     @mute_logger('openerp.addons.base.ir.ir_model', 'openerp.osv.orm')
-    
     def setUp(self):
         super(TestSale, self).setUp()
-        
+
     def test_sale_to_invoice(self):
-        """ Testing for invoice create,validate and pay with invoicing and payment user."""
-        cr, uid = self.cr, self.uid   
-        
+        """ Testing for invoice create,validate and pay with invoicing and payment user.""" 
         # Usefull models
-        data_obj = self.registry('ir.model.data')
-        user_obj = self.registry('res.users')
-        partner_obj = self.registry('res.partner')
-        sale_obj = self.registry('sale.order')
-        sale_order_line = self.registry('sale.order.line')
-        sale_advance_payment_inv = self.registry('sale.advance.payment.inv')
-        invoice_obj = self.registry('account.invoice')
-        voucher_obj = self.registry('account.voucher')
-        
+        IrModelData = self.env['ir.model.data']
+        partner_obj = self.env['res.partner']
+        journal_obj = self.env['account.journal']
+        account_obj = self.env['account.account']
         # Usefull record id
-        group_id = data_obj.get_object_reference(cr, uid, 'account', 'group_account_invoice')[1]
-        product_ref = data_obj.get_object_reference(cr, uid, 'product', 'product_category_5')
-        product_id = product_ref and product_ref[1] or False
-        account_id = data_obj.get_object_reference(cr, uid, 'account', 'cash')[1]
-        company_id = data_obj.get_object_reference(cr, uid, 'base', 'main_company')[1]
-        journal_id = data_obj.get_object_reference(cr, uid, 'account', 'bank_journal')[1]
-        period_id = data_obj.get_object_reference(cr, uid, 'account', 'period_8')[1]
-        
+        group_id = IrModelData.xmlid_to_res_id('account.group_account_invoice') or False
+        company_id = IrModelData.xmlid_to_res_id('base.main_company') or False
+
+        # Usefull accounts
+        user_type_id = IrModelData.xmlid_to_res_id('account.data_account_type_revenue')
+        account_rev_id = account_obj.create({'code': 'X2020', 'name': 'Sales - Test Sales Account', 'user_type_id': user_type_id, 'reconcile': True})
+        user_type_id = IrModelData.xmlid_to_res_id('account.data_account_type_receivable')
+        account_recv_id = account_obj.create({'code': 'X1012', 'name': 'Sales - Test Reicv Account', 'user_type_id': user_type_id, 'reconcile': True})
+
+        # Add account to product
+        product_template_id = self.env.ref('sale.advance_product_0').product_tmpl_id
+        product_template_id.write({'property_account_income_id': account_rev_id})
+
+        # Create Sale Journal
+        journal_obj.create({'name': 'Sale Journal - Test', 'code': 'STSJ', 'type': 'sale', 'company_id': company_id})
+
         # In order to test, I create new user and applied Invoicing & Payments group.
-        user_id = user_obj.create(cr, uid, {
+        user = self.env['res.users'].create({
             'name': 'Test User',
             'login': 'test@test.com',
             'company_id': 1,
-            'groups_id': [(6, 0, [group_id])]
-        })
-        assert user_id, "User will not created."
-        
+            'groups_id': [(6, 0, [group_id])]})
+        assert user, "User will not created."
         # I create partner for sale order.
-        partner_id = partner_obj.create(cr, uid, {
+        partner = partner_obj.create({
             'name': 'Test Customer',
             'email': 'testcustomer@test.com',
+            'property_account_receivable_id': account_recv_id,
         })
-        
+
         # In order to test I create sale order and confirmed it.
-        order_id = sale_obj.create(cr, uid, {
-            'partner_id': partner_id,
+        order = self.env['sale.order'].create({
+            'partner_id': partner.id,
+            'partner_invoice_id': partner.id,
+            'partner_shipping_id': partner.id,
             'date_order': datetime.today(),
-        })
-        order_line = sale_order_line.create(cr, uid, {
-                'order_id': order_id, 
-                'product_id': product_id,
-        })
-        assert order_id, "Sale order will not created."
-        
-        context = {"active_model": 'sale.order', "active_ids": [order_id], "active_id":order_id}
-        sale_obj.action_button_confirm(cr, uid, [order_id], context=context)
-        
+            'pricelist_id': self.env.ref('product.list0').id})
+        assert order, "Sale order will not created."
+        context = {"active_model": 'sale.order', "active_ids": [order.id], "active_id": order.id}
+        order.with_context(context).action_confirm()
         # Now I create invoice.
-        pay_id = sale_advance_payment_inv.create(cr, uid, {'advance_payment_method': 'fixed', 'amount': 5})
-        inv = sale_advance_payment_inv.create_invoices(cr, uid, [pay_id], context=context)
-        invoice_ids = sale_obj.browse(cr, uid, order_id).invoice_ids
-        assert invoice_ids,"No any invoice is created for this sale order"
-        
-        # Now I validate pay invoice wihth Test User(invoicing and payment).
-        for invoice in invoice_ids:
-            invoice_obj.invoice_validate(cr, uid, [invoice.id], context=context)
-        
-        # Now I create and post an account voucher of amount 75.0 for the partner Test Customer.
-        voucher_id = voucher_obj.create(cr, uid, {
-            'account_id': account_id,
-            'amount': 75.0,
-            'company_id': company_id,
-            'journal_id': journal_id,
-            'partner_id': partner_id,
-            'period_id': period_id,
-            'type': 'receipt',
+        payment = self.env['sale.advance.payment.inv'].create({
+            'advance_payment_method': 'fixed',
+            'amount': 5,
+            'product_id': self.env.ref('sale.advance_product_0').id,
         })
-        assert voucher_id,"Voucher will not created."
-        voucher = voucher_obj.browse(cr, uid, voucher_id)
-        voucher.signal_workflow('proforma_voucher')
+        invoice = payment.with_context(context).create_invoices()
+        assert order.invoice_ids, "No any invoice is created for this sale order"
+        # Now I validate pay invoice wihth Test User(invoicing and payment).
+        for invoice in order.invoice_ids:
+            invoice.with_context(context).invoice_validate()

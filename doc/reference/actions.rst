@@ -1,3 +1,5 @@
+:banner: banners/actions.jpg
+
 .. _reference/actions:
 
 =======
@@ -61,8 +63,9 @@ Its fields are:
     search view to load for the action. Defaults to fetching the default
     search view for the model
 ``target`` (optional)
-    whether the views should be open in the main content area (``current``)
-    or in a dialog/popup (``new``). Defaults to ``current``.
+    whether the views should be open in the main content area (``current``),
+    in full screen mode (``fullscreen``) or in a dialog/popup (``new``). Defaults
+    to ``current``.
 ``context`` (optional)
     additional context data to pass to the views
 ``domain`` (optional)
@@ -99,9 +102,8 @@ In-database window actions have a few different fields which should be ignored
 by clients, mostly to use in composing the ``views`` list:
 
 ``view_mode``
-    comma-separated list of view types (tree, form, ...) as a string. All of
-    these types will be present in the generated ``views`` list (with at least
-    a ``False`` view_id)
+    comma-separated list of view types as a string. All of these types will be
+    present in the generated ``views`` list (with at least a ``False`` view_id)
 ``view_ids``
     M2M\ [#notquitem2m]_ to view objects, defines the initial content of
     ``views``
@@ -204,9 +206,10 @@ field:
 .. code-block:: xml
 
     <record model="ir.actions.server" id="print_instance">
+        <field name="name">Res Partner Server Action</field>
         <field name="model_id" ref="model_res_partner"/>
         <field name="code">
-            print self, object
+            raise Warning(object.name)
         </field>
     </record>
 
@@ -218,6 +221,7 @@ field:
     .. code-block:: xml
 
         <record model="ir.actions.server" id="print_instance">
+            <field name="name">Res Partner Server Action</field>
             <field name="model_id" ref="model_res_partner"/>
             <field name="code">
                 if object.some_condition():
@@ -230,7 +234,7 @@ field:
             </field>
         </record>
 
-    will ask the client to open a form for the record if it fullfils some
+    will ask the client to open a form for the record if it fulfills some
     condition
 
 This tends to be the only action type created from :ref:`data files
@@ -368,10 +372,36 @@ server actions:
 
 .. _reference/actions/report:
 
-Report Actions
-==============
+Report Actions (``ir.actions.report.xml``)
+==========================================
 
-.. todo:: sle-odoo
+Triggers the printing of a report
+
+``name`` (mandatory)
+    only useful as a mnemonic/description of the report when looking for one
+    in a list of some sort
+``model`` (mandatory)
+    the model your report will be about
+``report_type`` (mandatory)
+    either ``qweb-pdf`` for PDF reports or ``qweb-html`` for HTML
+``report_name``
+    the name of your report (which will be the name of the PDF output)
+``groups_id``
+    :class:`~openerp.fields.Many2many` field to the groups allowed to view/use
+    the current report
+``paperformat_id``
+    :class:`~openerp.fields.Many2one` field to the paper format you wish to
+    use for this report (if not specified, the company format will be used)
+``attachment_use``
+    if set to ``True``, the report is only generated once the first time it is
+    requested, and re-printed from the stored report afterwards instead of
+    being re-generated every time.
+
+    Can be used for reports which must only be generated once (e.g. for legal
+    reasons)
+``attachment``
+    python expression that defines the name of the report; the record is
+    accessible as the variable ``object``
 
 .. _reference/actions/client:
 

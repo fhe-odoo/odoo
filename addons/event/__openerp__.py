@@ -17,26 +17,24 @@ Key Features
 * Manage your Events and Registrations
 * Use emails to automatically confirm and send acknowledgements for any event registration
 """,
-    'author': 'OpenERP SA',
-    'depends': ['base_setup', 'board', 'email_template', 'marketing'],
+    'depends': ['base_setup', 'mail', 'web_tip'],
     'data': [
         'security/event_security.xml',
         'security/ir.model.access.csv',
         'wizard/event_confirm_view.xml',
+        'views/event_views.xml',
         'report/report_event_registration_view.xml',
-        'event_view.xml',
-        'event_data.xml',
-        'res_config_view.xml',
-        'email_template.xml',
-        'views/event.xml',
-        'event_report.xml',
-        'views/report_registrationbadge.xml',
+        'report/event_event_templates.xml',
+        'report/event_event_reports.xml',
+        'data/event_data.xml',
+        'data/event_data_tip.xml',
+        'views/event_config_settings_views.xml',
+        'views/event_templates.xml',
+        'data/email_template_data.xml',
     ],
     'demo': [
-        'event_demo.xml',
+        'data/event_demo.xml',
     ],
     'installable': True,
     'auto_install': False,
-    'images': ['images/1_event_type_list.jpeg', 'images/2_events.jpeg', 'images/3_registrations.jpeg', 'images/events_kanban.jpeg'],
 }
-# vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:

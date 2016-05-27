@@ -1,11 +1,12 @@
-import unittest2
+# -*- coding: utf-8 -*-
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-import openerp.tests.common as common
+from odoo.tests.common import TransactionCase
 
-class test_res_lang(common.TransactionCase):
+class test_res_lang(TransactionCase):
 
     def test_00_intersperse(self):
-        from openerp.addons.base.res.res_lang import intersperse
+        from odoo.addons.base.res.res_lang import intersperse
 
         assert intersperse("", []) == ("", 0)
         assert intersperse("0", []) == ("0", 0)
@@ -39,5 +40,3 @@ class test_res_lang(common.TransactionCase):
         assert intersperse("abc12", [3], '.') == ('abc12', 0)
         assert intersperse("abc12", [2], '.') == ('abc12', 0)
         assert intersperse("abc12", [1], '.') == ('abc1.2', 1)
-
-# vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:

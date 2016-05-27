@@ -1,32 +1,16 @@
 # -*- coding: utf-8 -*-
-##############################################################################
-#
-#    OpenERP, Open Source Management Solution
-#    Copyright (C) 2004-2010 Tiny SPRL (<http://tiny.be>).
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as
-#    published by the Free Software Foundation, either version 3 of the
-#    License, or (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU Affero General Public License for more details.
-#
-#    You should have received a copy of the GNU Affero General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-##############################################################################
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 import time
 from psycopg2 import OperationalError
 
+from openerp import api
 from openerp import SUPERUSER_ID
 from openerp.osv import fields, osv
 import openerp.addons.decimal_precision as dp
 from openerp.tools.translate import _
 import openerp
+from openerp.exceptions import UserError
 
 PROCUREMENT_PRIORITIES = [('0', 'Not urgent'), ('1', 'Normal'), ('2', 'Urgent'), ('3', 'Very Urgent')]
 
@@ -60,7 +44,7 @@ class procurement_group(osv.osv):
         'name': fields.char('Reference', required=True),
         'move_type': fields.selection([
             ('direct', 'Partial'), ('one', 'All at once')],
-            'Delivery Method', required=True),
+            'Delivery Type', required=True),
         'procurement_ids': fields.one2many('procurement.order', 'group_id', 'Procurements'),
     }
     _defaults = {
@@ -80,7 +64,7 @@ class procurement_rule(osv.osv):
         return []
 
     _columns = {
-        'name': fields.char('Name', required=True,
+        'name': fields.char('Name', required=True, translate=True,
             help="This field will fill the packing origin and the name of its moves"),
         'active': fields.boolean('Active', help="If unchecked, it will allow you to hide the rule without removing it."),
         'group_propagation_option': fields.selection([('none', 'Leave Empty'), ('propagate', 'Propagate'), ('fixed', 'Fixed')], string="Propagation of Procurement Group"),
@@ -105,8 +89,7 @@ class procurement_order(osv.osv):
     _name = "procurement.order"
     _description = "Procurement"
     _order = 'priority desc, date_planned, id asc'
-    _inherit = ['mail.thread']
-    _log_create = False
+    _inherit = ['mail.thread','ir.needaction_mixin']
     _columns = {
         'name': fields.text('Description', required=True),
 
@@ -126,9 +109,6 @@ class procurement_order(osv.osv):
         'product_qty': fields.float('Quantity', digits_compute=dp.get_precision('Product Unit of Measure'), required=True, states={'confirmed': [('readonly', False)]}, readonly=True),
         'product_uom': fields.many2one('product.uom', 'Product Unit of Measure', required=True, states={'confirmed': [('readonly', False)]}, readonly=True),
 
-        'product_uos_qty': fields.float('UoS Quantity', states={'confirmed': [('readonly', False)]}, readonly=True),
-        'product_uos': fields.many2one('product.uom', 'Product UoS', states={'confirmed': [('readonly', False)]}, readonly=True),
-
         'state': fields.selection([
             ('cancel', 'Cancelled'),
             ('confirmed', 'Confirmed'),
@@ -145,6 +125,9 @@ class procurement_order(osv.osv):
         'company_id': lambda self, cr, uid, c: self.pool.get('res.company')._company_default_get(cr, uid, 'procurement.order', context=c)
     }
 
+    def _needaction_domain_get(self, cr, uid, context=None):
+        return [('state', '=', 'exception')] 
+        
     def unlink(self, cr, uid, ids, context=None):
         procurements = self.read(cr, uid, ids, ['state'], context=context)
         unlink_ids = []
@@ -152,9 +135,15 @@ class procurement_order(osv.osv):
             if s['state'] == 'cancel':
                 unlink_ids.append(s['id'])
             else:
-                raise osv.except_osv(_('Invalid Action!'),
-                        _('Cannot delete Procurement Order(s) which are in %s state.') % s['state'])
+                raise UserError(_('Cannot delete Procurement Order(s) which are in %s state.') % s['state'])
         return osv.osv.unlink(self, cr, uid, unlink_ids, context=context)
+
+    def create(self, cr, uid, vals, context=None):
+        context = context or {}
+        procurement_id = super(procurement_order, self).create(cr, uid, vals, context=context)
+        if not context.get('procurement_autorun_defer'):
+            self.run(cr, uid, [procurement_id], context=context)
+        return procurement_id
 
     def do_view_procurements(self, cr, uid, ids, context=None):
         '''
@@ -169,7 +158,7 @@ class procurement_order(osv.osv):
         return result
 
     def onchange_product_id(self, cr, uid, ids, product_id, context=None):
-        """ Finds UoM and UoS of changed product.
+        """ Finds UoM of changed product.
         @param product_id: Changed id of product.
         @return: Dictionary of values.
         """
@@ -177,17 +166,13 @@ class procurement_order(osv.osv):
             w = self.pool.get('product.product').browse(cr, uid, product_id, context=context)
             v = {
                 'product_uom': w.uom_id.id,
-                'product_uos': w.uos_id and w.uos_id.id or w.uom_id.id
             }
             return {'value': v}
         return {}
 
-    def get_cancel_ids(self, cr, uid, ids, context=None):
-        return [proc.id for proc in self.browse(cr, uid, ids, context=context) if proc.state != 'done']
-
     def cancel(self, cr, uid, ids, context=None):
         #cancel only the procurements that aren't done already
-        to_cancel_ids = self.get_cancel_ids(cr, uid, ids, context=context)
+        to_cancel_ids = [proc.id for proc in self.browse(cr, uid, ids, context=context) if proc.state != 'done']
         if to_cancel_ids:
             return self.write(cr, uid, to_cancel_ids, {'state': 'cancel'}, context=context)
 
@@ -202,8 +187,8 @@ class procurement_order(osv.osv):
             procurement = self.browse(cr, uid, procurement_id, context=context)
             if procurement.state not in ("running", "done"):
                 try:
-                    if self._assign(cr, uid, procurement, context=context):
-                        res = self._run(cr, uid, procurement, context=context or {})
+                    if self._assign(cr, uid, [procurement.id], context=context):
+                        res = self._run(cr, uid, [procurement.id], context=context or {})
                         if res:
                             self.write(cr, uid, [procurement.id], {'state': 'running'}, context=context)
                         else:
@@ -225,7 +210,7 @@ class procurement_order(osv.osv):
         done_ids = []
         for procurement in self.browse(cr, uid, ids, context=context):
             try:
-                result = self._check(cr, uid, procurement, context=context)
+                result = self._check(cr, uid, [procurement.id], context=context)
                 if result:
                     done_ids.append(procurement.id)
                 if autocommit:
@@ -243,41 +228,38 @@ class procurement_order(osv.osv):
     #
     # Method to overwrite in different procurement modules
     #
-    def _find_suitable_rule(self, cr, uid, procurement, context=None):
+    def _find_suitable_rule(self, cr, uid, ids, context=None):
         '''This method returns a procurement.rule that depicts what to do with the given procurement
         in order to complete its needs. It returns False if no suiting rule is found.
-            :param procurement: browse record
             :rtype: int or False
         '''
         return False
 
-    def _assign(self, cr, uid, procurement, context=None):
+    def _assign(self, cr, uid, ids, context=None):
         '''This method check what to do with the given procurement in order to complete its needs.
         It returns False if no solution is found, otherwise it stores the matching rule (if any) and
         returns True.
-            :param procurement: browse record
             :rtype: boolean
         '''
+        procurement = self.browse(cr, uid, ids[0], context=context)
         #if the procurement already has a rule assigned, we keep it (it has a higher priority as it may have been chosen manually)
         if procurement.rule_id:
             return True
-        elif procurement.product_id.type != 'service':
-            rule_id = self._find_suitable_rule(cr, uid, procurement, context=context)
+        elif procurement.product_id.type not in ('service', 'digital'):
+            rule_id = self._find_suitable_rule(cr, uid, ids, context=context)
             if rule_id:
                 self.write(cr, uid, [procurement.id], {'rule_id': rule_id}, context=context)
                 return True
         return False
 
-    def _run(self, cr, uid, procurement, context=None):
+    def _run(self, cr, uid, ids, context=None):
         '''This method implements the resolution of the given procurement
-            :param procurement: browse record
             :returns: True if the resolution of the procurement was a success, False otherwise to set it in exception
         '''
         return True
 
-    def _check(self, cr, uid, procurement, context=None):
+    def _check(self, cr, uid, ids, context=None):
         '''Returns True if the given procurement is fulfilled, False otherwise
-            :param procurement: browse record
             :rtype: boolean
         '''
         return False
@@ -344,4 +326,3 @@ class procurement_order(osv.osv):
                     pass
 
         return {}
-# vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:

@@ -1,41 +1,28 @@
 # -*- coding: utf-8 -*-
-##############################################################################
-#
-#    OpenERP, Open Source Management Solution
-#    Copyright (C) 2004-2009 Tiny SPRL (<http://tiny.be>).
-#    Copyright (C) 2010-2014 OpenERP s.a. (<http://openerp.com>).
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as
-#    published by the Free Software Foundation, either version 3 of the
-#    License, or (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU Affero General Public License for more details.
-#
-#    You should have received a copy of the GNU Affero General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-##############################################################################
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 import functools
 import imp
+import importlib
+import inspect
 import itertools
 import logging
 import os
+import pkg_resources
 import re
 import sys
 import time
+import types
 import unittest
+import threading
+from operator import itemgetter
 from os.path import join as opj
 
-import unittest2
 
 import openerp
 import openerp.tools as tools
 import openerp.release as release
+from openerp import SUPERUSER_ID
 from openerp.tools.safe_eval import safe_eval as eval
 
 MANIFEST = '__openerp__.py'
@@ -50,33 +37,85 @@ hooked = False
 # Modules already loaded
 loaded = []
 
-class AddonsImportHook(object):
+class AddonsHook(object):
+    """ Makes modules accessible through openerp.addons.* and odoo.addons.*
     """
-    Import hook to load OpenERP addons from multiple paths.
+    def find_module(self, name, path):
+        if name.startswith(('odoo.addons.', 'openerp.addons.'))\
+                and name.count('.') == 2:
+            return self
 
-    OpenERP implements its own import-hook to load its addons. OpenERP
-    addons are Python modules. Originally, they were each living in their
-    own top-level namespace, e.g. the sale module, or the hr module. For
-    backward compatibility, `import <module>` is still supported. Now they
-    are living in `openerp.addons`. The good way to import such modules is
-    thus `import openerp.addons.module`.
+    def load_module(self, name):
+        assert name not in sys.modules
+
+        # get canonical names
+        odoo_name = re.sub(r'^openerp.addons.(\w+)$', r'odoo.addons.\g<1>', name)
+        openerp_name = re.sub(r'^odoo.addons.(\w+)$', r'openerp.addons.\g<1>', odoo_name)
+
+        assert odoo_name not in sys.modules
+        assert openerp_name not in sys.modules
+
+        # get module name in addons paths
+        _1, _2, addon_name = name.split('.')
+        # load module
+        f, path, (_suffix, _mode, type_) = imp.find_module(addon_name, ad_paths)
+        if f: f.close()
+
+        # TODO: fetch existing module from sys.modules if reloads permitted
+        # create empty openerp.addons.* module, set name
+        new_mod = types.ModuleType(openerp_name)
+        new_mod.__loader__ = self
+
+        # module top-level can only be a package
+        assert type_ == imp.PKG_DIRECTORY, "Odoo addon top-level must be a package"
+        modfile = opj(path, '__init__.py')
+        new_mod.__file__ = modfile
+        new_mod.__path__ = [path]
+        new_mod.__package__ = openerp_name
+
+        # both base and alias should be in sys.modules to handle recursive and
+        # corecursive situations
+        sys.modules[openerp_name] = sys.modules[odoo_name] = new_mod
+
+        # execute source in context of module *after* putting everything in
+        # sys.modules, so recursive import works
+        execfile(modfile, new_mod.__dict__)
+
+        # people import openerp.addons and expect openerp.addons.<module> to work
+        setattr(openerp.addons, addon_name, new_mod)
+
+        return sys.modules[name]
+# need to register loader with setuptools as Jinja relies on it when using
+# PackageLoader
+pkg_resources.register_loader_type(AddonsHook, pkg_resources.DefaultProvider)
+
+class OdooHook(object):
+    """ Makes odoo package also available as openerp
     """
 
-    def find_module(self, module_name, package_path):
-        module_parts = module_name.split('.')
-        if len(module_parts) == 3 and module_name.startswith('openerp.addons.'):
-            return self # We act as a loader too.
+    def find_module(self, name, path=None):
+        # openerp.addons.<identifier> should already be matched by AddonsHook,
+        # only framework and subdirectories of modules should match
+        if re.match(r'^odoo\b', name):
+            return self
 
-    def load_module(self, module_name):
-        if module_name in sys.modules:
-            return sys.modules[module_name]
+    def load_module(self, name):
+        assert name not in sys.modules
 
-        _1, _2, module_part = module_name.split('.')
-        # Note: we don't support circular import.
-        f, path, descr = imp.find_module(module_part, ad_paths)
-        mod = imp.load_module('openerp.addons.' + module_part, f, path, descr)
-        sys.modules['openerp.addons.' + module_part] = mod
-        return mod
+        canonical = re.sub(r'^odoo(.*)', r'openerp\g<1>', name)
+
+        if canonical in sys.modules:
+            mod = sys.modules[canonical]
+        else:
+            # probable failure: canonical execution calling old naming -> corecursion
+            mod = importlib.import_module(canonical)
+
+        # just set the original module at the new location. Don't proxy,
+        # it breaks *-import (unless you can find how `from a import *` lists
+        # what's supposed to be imported by `*`, and manage to override it)
+        sys.modules[name] = mod
+
+        return sys.modules[name]
 
 def initialize_sys_path():
     """
@@ -105,7 +144,8 @@ def initialize_sys_path():
         ad_paths.append(base_path)
 
     if not hooked:
-        sys.meta_path.append(AddonsImportHook())
+        sys.meta_path.append(AddonsHook())
+        sys.meta_path.append(OdooHook())
         hooked = True
 
 def get_module_path(module, downloaded=False, display_warning=True):
@@ -250,18 +290,18 @@ def load_information_from_description_file(module, mod_path=None):
             # default values for descriptor
             info = {
                 'application': False,
-                'author': '',
+                'author': 'Odoo S.A.',
                 'auto_install': False,
                 'category': 'Uncategorized',
                 'depends': [],
                 'description': '',
                 'icon': get_module_icon(module),
                 'installable': True,
-                'license': 'AGPL-3',
+                'license': 'LGPL-3',
                 'post_load': None,
                 'version': '1.0',
                 'web': False,
-                'website': '',
+                'website': 'https://www.odoo.com',
                 'sequence': 100,
                 'summary': '',
             }
@@ -294,30 +334,32 @@ def load_information_from_description_file(module, mod_path=None):
     _logger.debug('module %s: no %s file found.', module, MANIFEST)
     return {}
 
-def init_module_models(cr, module_name, obj_list):
+def init_models(models, cr, context):
     """ Initialize a list of models.
 
-    Call _auto_init and init on each model to create or update the
-    database tables supporting the models.
+    Call methods ``_auto_init``, ``init``, and ``_auto_end`` on each model to
+    create or update the database tables supporting the models.
 
-    TODO better explanation of _auto_init and init.
+    The context may contain the following items:
+     - ``module``: the name of the module being installed/updated, if any;
+     - ``update_custom_fields``: whether custom fields should be updated.
 
     """
-    _logger.info('module %s: creating or updating database tables', module_name)
-    todo = []
-    for obj in obj_list:
-        result = obj._auto_init(cr, {'module': module_name})
-        if result:
-            todo += result
-        if hasattr(obj, 'init'):
-            obj.init(cr)
+    if 'module' in context:
+        _logger.info('module %s: creating or updating database tables', context['module'])
+    context = dict(context, todo=[])
+    models = [model.browse(cr, SUPERUSER_ID, [], context) for model in models]
+    for model in models:
+        model._auto_init()
+        model.init()
         cr.commit()
-    for obj in obj_list:
-        obj._auto_end(cr, {'module': module_name})
+    for model in models:
+        model._auto_end()
         cr.commit()
-    todo.sort(key=lambda x: x[0])
-    for t in todo:
-        t[1](cr, *t[2])
+    for _, func, args in sorted(context['todo'], key=itemgetter(0)):
+        func(cr, *args)
+    if models:
+        models[0].recompute()
     cr.commit()
 
 def load_openerp_module(module_name):
@@ -392,23 +434,26 @@ def adapt_version(version):
     return version
 
 def get_test_modules(module):
-    """ Return a list of module for the addons potentialy containing tests to
-    feed unittest2.TestLoader.loadTestsFromModule() """
+    """ Return a list of module for the addons potentially containing tests to
+    feed unittest.TestLoader.loadTestsFromModule() """
     # Try to import the module
-    module = 'openerp.addons.' + module + '.tests'
+    modpath = 'openerp.addons.' + module
     try:
-        __import__(module)
+        mod = importlib.import_module('.tests', modpath)
     except Exception, e:
         # If module has no `tests` sub-module, no problem.
         if str(e) != 'No module named tests':
             _logger.exception('Can not `import %s`.', module)
         return []
 
-    # include submodules too
-    result = [mod_obj for name, mod_obj in sys.modules.iteritems()
-              if mod_obj # mod_obj can be None
-              if name.startswith(module)
-              if re.search(r'test_\w+$', name)]
+    if hasattr(mod, 'fast_suite') or hasattr(mod, 'checks'):
+        _logger.warn(
+            "Found deprecated fast_suite or checks attribute in test module "
+            "%s. These have no effect in or after version 8.0.",
+            mod.__name__)
+
+    result = [mod_obj for name, mod_obj in inspect.getmembers(mod, inspect.ismodule)
+              if name.startswith('test_')]
     return result
 
 # Use a custom stream object to log the test executions.
@@ -456,16 +501,17 @@ def run_unit_tests(module_name, dbname, position=runs_at_install):
     global current_test
     current_test = module_name
     mods = get_test_modules(module_name)
+    threading.currentThread().testing = True
     r = True
     for m in mods:
-        tests = unwrap_suite(unittest2.TestLoader().loadTestsFromModule(m))
-        suite = unittest2.TestSuite(itertools.ifilter(position, tests))
+        tests = unwrap_suite(unittest.TestLoader().loadTestsFromModule(m))
+        suite = unittest.TestSuite(itertools.ifilter(position, tests))
 
         if suite.countTestCases():
             t0 = time.time()
             t0_sql = openerp.sql_db.sql_counter
             _logger.info('%s running tests.', m.__name__)
-            result = unittest2.TextTestRunner(verbosity=2, stream=TestStream(m.__name__)).run(suite)
+            result = unittest.TextTestRunner(verbosity=2, stream=TestStream(m.__name__)).run(suite)
             if time.time() - t0 > 5:
                 _logger.log(25, "%s tested in %.2fs, %s queries", m.__name__, time.time() - t0, openerp.sql_db.sql_counter - t0_sql)
             if not result.wasSuccessful():
@@ -473,6 +519,7 @@ def run_unit_tests(module_name, dbname, position=runs_at_install):
                 _logger.error("Module %s: %d failures, %d errors", module_name, len(result.failures), len(result.errors))
 
     current_test = None
+    threading.currentThread().testing = False
     return r
 
 def unwrap_suite(test):
@@ -482,8 +529,8 @@ def unwrap_suite(test):
     test suites). These can then be checked for run/skip attributes
     individually.
 
-    An alternative would be to use a variant of @unittest2.skipIf with a state
-    flag of some sort e.g. @unittest2.skipIf(common.runstate != 'at_install'),
+    An alternative would be to use a variant of @unittest.skipIf with a state
+    flag of some sort e.g. @unittest.skipIf(common.runstate != 'at_install'),
     but then things become weird with post_install as tests should *not* run
     by default there
     """
@@ -500,5 +547,3 @@ def unwrap_suite(test):
     for item in itertools.chain.from_iterable(
             itertools.imap(unwrap_suite, subtests)):
         yield item
-
-# vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:

@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-import unittest2
+import unittest
 
-import openerp
-from openerp.tools.misc import mute_logger
-from openerp.tests import common
+import odoo
+from odoo.tests import common
+from odoo.tools.misc import mute_logger
 
-DB = common.DB
 ADMIN_USER_ID = common.ADMIN_USER_ID
 
 def registry():
-    return openerp.modules.registry.RegistryManager.get(DB)
+    return odoo.registry(common.get_db_name())
 
 
-class test_cr_execute(unittest2.TestCase):
+class TestExecute(unittest.TestCase):
     """ Try cr.execute with wrong parameters """
 
     @mute_logger('openerp.sql_db')
@@ -28,5 +28,3 @@ class test_cr_execute(unittest2.TestCase):
                 cr.execute("SELECT id FROM res_users WHERE id=%s", 1)
             with self.assertRaises(ValueError):
                 cr.execute("SELECT id FROM res_users WHERE id=%s", '1')
-
-# vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:

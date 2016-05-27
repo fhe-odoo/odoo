@@ -1,312 +1,337 @@
-(function() {
+odoo.define('web_tip.web_tip', function (require) {
+"use strict";
 
-    var instance = openerp;
+var core = require('web.core');
+var Model = require('web.DataModel');
+var WebClient = require('web.WebClient');
+var formView = require('web.FormView');
+var utils = require('web.utils');
 
-    instance.web.Tip = instance.web.Class.extend({
-        init: function() {
-            var self = this;
-            self.tips = [];
-            self.tip_mutex = new $.Mutex();
-            self.$overlay = null;
-            self.$element = null;
+var bus = core.bus;
+var Class = core.Class;
 
-            var Tips = new instance.web.Model('web.tip');
-            Tips.query(['title', 'description', 'action_id', 'model', 'type', 'mode', 'trigger_selector',
-                'highlight_selector', 'end_selector', 'end_event', 'placement', 'is_consumed'])
-                .all().then(function(tips) {
-                    self.tips = tips;
-                })
-            ;
+var Tips = Class.extend({
+    init: function() {
+        var self = this;
 
-            instance.web.bus.on('action', this, function(action) {
-                self.on_action(action);
+        this.tips = [];
+        this.view = null;
+
+        var Tips = new Model('web.tip');
+        Tips.query(['title', 'description', 'action_id', 'model', 'type', 'mode', 'trigger_selector',
+            'highlight_selector', 'end_selector', 'end_event', 'placement', 'is_consumed'])
+            .all().then(function(tips) {
+                self.tips = tips;
             });
 
-            instance.web.bus.on('view_shown', this, function(view) {
-                if (_.keys(view.fields_view).length === 0) {
-                    view.on('view_loaded', this, function(fields_view) {
-                        self.on_view(view);
-                    });
-                } else {
-                    self.on_view(view);
-                }
-
-                view.on('switch_mode', this, function() {
-                });
-            });
-
-            instance.web.bus.on('view_switch_mode', this, function(viewManager, mode) {
-                self.on_switch(viewManager, mode);
-            });
-
-            instance.web.bus.on('form_view_shown', this, function(formView) {
-                self.on_form_view(formView);
-            });
-
-            instance.web.bus.on('form_view_saved', this, function(formView) {
-                self.on_form_view(formView);
-            });
-        },
-
-        // stub
-        on_action: function(action) {
-            var self = this;
-            var action_id = action.id;
-            var model = action.res_model;
-        },
-
-        on_view: function(view) {
-            var self = this;
-            var fields_view = view.fields_view;
-            var action_id = view.ViewManager.action ? view.ViewManager.action.id : null;
-            var model = fields_view.model;
-
-            // kanban
-            if(fields_view.type === 'kanban') {
-                var dataset_def = $.Deferred();
-                var groups_def = $.Deferred();
-                view.on("kanban_dataset_processed", self, function() {
-                    var length = view.dataset.ids.length;
-                    dataset_def.resolve(length);
-                });
-                view.on('kanban_groups_processed', self, function() {
-                    groups_def.resolve();
-                });
-                dataset_def.done(function(length) {
-                    self.eval_tip(action_id, model, fields_view.type);
-                });
-                groups_def.done(function() {
-                    self.eval_tip(action_id, model, fields_view.type);
-                });
-            } else if (fields_view.type === 'tree') {
-                view.on('view_list_rendered', self, function() {
-                    self.eval_tip(action_id, model, fields_view.type);
-                });
-            } else if (view.hasOwnProperty('editor')) {
-                view.on('view_list_rendered', self, function() {
-                    self.reposition();
-                });
-            }
-        },
-
-        on_form_view: function(formView) {
-            var self = this;
-            var model = formView.model;
-            var type = formView.datarecord.type ? formView.datarecord.type : null;
-            var mode = 'form';
-            formView.on('view_content_has_changed', self, _.once(function() {
-                self.eval_tip(null, model, mode, type);
-            }));
-            if ($('.oe_chatter').length > 0) {
-                instance.web.bus.on('chatter_messages_fetched', this, _.once(function () {
-                    self.eval_tip(null, model, mode, type);
-                }));
-            } else {
-                self.eval_tip(null, model, mode, type);
-            }
-        },
-
-        // stub
-        on_switch: function (viewManager, mode) {
-            var self = this;
-            var action = viewManager.action;
-            var action_id = action.id;
-            var model = action.res_model;
-        },
-
-        eval_tip: function(action_id, model, mode, type) {
-            var self = this;
-            var filter = {};
-            var valid_tips = [];
-            var tips = [];
-            if (action_id) {
-                valid_tips = _.filter(self.tips, function (tip) {
-                    return tip.action_id[0] === action_id;
-                });
-            }
-
-            filter.model = model;
-            filter.mode = mode;
-            tips = _.where(self.tips, filter);
-            if (type) {
-                tips = _.filter(tips, function(tip) {
-                    if (!tip.type) {
-                        return true;
-                    }
-                    return tip.type === type;
-                });
-            }
-
-            valid_tips = _.uniq(valid_tips.concat(tips));
-            _.each(valid_tips, function(tip) {
-                if (!tip.is_consumed) {
-                    self.add_tip(tip);
-                }
-            });
-        },
-
-
-        add_tip: function(tip) {
-            var self = this;
-            self.tip_mutex.exec(function() {
-                if (!tip.is_consumed) {
-                    return $.when(self.do_tip(tip));
-                }
-            });
-        },
-
-        do_tip: function (tip) {
-            var self = this;
-            var def = $.Deferred();
-            var Tips = new instance.web.Model('web.tip');
-            var highlight_selector = tip.highlight_selector;
-            var triggers = tip.trigger_selector ? tip.trigger_selector.split(',') : [];
-            var trigger_tip = true;
-
-            if(!$(highlight_selector).length > 0) {
-                return def.reject();
-            }
-            for (var i = 0; i < triggers.length; i++) {
-                if(!$(triggers[i]).length > 0) {
-                    trigger_tip = false;
-                }
-            }
-
-            if (trigger_tip) {
-                self.$element = $(highlight_selector).first();
-                if (self.$element.height() === 0 || self.$element.width() === 0) {
-                    var $images = self.$element.find('img');
-                    if ($images.length > 0) {
-                        $images.first().load(function() {
-                            self.add_tip(tip);
-                        });
-                    }
-                    return def.reject();
-                }
-
-                // if needed, scroll prior to displaying the tip
-                var scroll = _.find(self.$element.parentsUntil('body'), function(el) {
-                    var overflow = $(el).css('overflow-y');
-                    return (overflow === 'auto' || overflow === 'scroll');
-                });
-                if (scroll) {
-                    $(scroll).scrollTo(self.$element);
-                }
-
-                self.$helper = $("<div>", { class: 'oe_tip_helper' });
-                self.$element.after(self.$helper);
-                self._set_helper_position();
-
-                self.$overlay = $("<div>", { class: 'oe_tip_overlay' });
-                $('body').append(self.$overlay);
-                self.$element.addClass('oe_tip_show_element');
-
-                // fix the stacking context problem
-                _.each(self.$element.parentsUntil('body'), function(el) {
-                    var zIndex = $(el).css('z-index');
-                    var opacity = parseFloat($(el).css('opacity'));
-
-                    if (/[0-9]+/.test(zIndex) || opacity < 1) {
-                        $(el).addClass('oe_tip_fix_parent');
-                    }
-                });
-
-                self.$element.popover({
-                    placement: tip.placement,
-                    title: tip.title,
-                    content: tip.description,
-                    html: true,
-                    container: 'body',
-                }).popover("show");
-
-                var $cross = $('<button type="button" class="close">&times;</button>');
-                $cross.addClass('oe_tip_close');
-
-                if (tip.title) {
-                    $('.popover-title').prepend($cross);
-                } else {
-                    $('.popover-content').prepend($cross);
-                }
-
-                // consume tip
-                tip.end_selector = tip.end_selector ? tip.end_selector : tip.highlight_selector;
-                $(tip.end_selector).one(tip.end_event, function($ev) {
-                    self.end_tip(tip);
-                    def.resolve();
-                });
-
-                // dismiss tip
-                $cross.on('click', function($ev) {
-                    self.end_tip(tip);
-                    def.resolve();
-                });
-                self.$overlay.on('click', function($ev) {
-                    self.end_tip(tip);
-                    def.resolve();
-                });
-                $(document).on('keyup.web_tip', function($ev) {
-                    if ($ev.which === 27) { // esc
-                        self.end_tip(tip);
-                        def.resolve();
-                    }
-                });
-
-                // resize
-                instance.web.bus.on('resize', this, function() {
-                    self.reposition();
+        bus.on('view_shown', this, function(view) {
+            if (_.keys(view.fields_view).length === 0) {
+                view.on('view_loaded', this, function(fields_view) {
+                    self.view = view;
+                    self.on_view();
                 });
             } else {
-               def.reject();
+                self.view = view;
+                self.on_view();
             }
-            return def;
-        },
+        });
+    },
 
-        end_tip: function(tip) {
-            var self = this;
-            var Tips = new instance.web.Model('web.tip');
-            $('#' + self.$element.attr('aria-describedby')).remove();
-            self.$overlay.remove();
-            self.$helper.remove();
-            self.$element.removeClass('oe_tip_show_element');
-            _.each($('.oe_tip_fix_parent'), function(el) {
-                $(el).removeClass('oe_tip_fix_parent');
+    on_view: function() {
+        var self = this;
+
+        bus.on('DOM_updated', this, function() {
+            var action_id = self.view.ViewManager.action ? self.view.ViewManager.action.id : null;
+            var model = self.view.fields_view.model;
+            var mode = self.view.fields_view.type;
+
+            if (mode == 'form') {
+                self.on_form_view(action_id, model);
+            }
+            else if (self.view.hasOwnProperty('editor')) {
+                self.view.on('view_list_rendered', self, function() {
+                    self.eval_tips(action_id, model, mode);
+                });
+            }
+            else {
+                self.eval_tips(action_id, model, mode);
+            }
+        });
+    },
+
+    on_form_view: function(action_id, model) {
+        var self = this;
+        var type = this.view.datarecord ? this.view.datarecord.type : null
+
+        if ($('.oe_chatter').length > 0) {
+            this.view.on('chatter_messages_displayed', this, function() {
+                self.eval_tips(action_id, model, 'form', type);
             });
-            $(document).off('keyup.web_tip');
-            Tips.call('consume', [tip.id], {});
-            tip.is_consumed = true;
-        },
+        } else {
+            this.eval_tips(action_id, model, 'form', type);
+        }
 
-        reposition: function() {
-            var self = this;
-            if (self.tip_mutex.def.state() === 'pending') {
-                self._set_helper_position();
-                self.$element.popover('show');
+        this.view.on('to_edit_mode', this, function() {
+            self.remove_tips();
+        });
+        this.view.on('to_view_mode', this, function() {
+            self.eval_tips(action_id, model, 'form', type);
+        });
+    },
+
+    eval_tips: function(action_id, model, mode, type) {
+        var self = this;
+        var filter = {};
+        var valid_tips = [];
+        var tips = [];
+
+        if (action_id) {
+            valid_tips = _.filter(self.tips, function (tip) {
+                return tip.action_id[0] === action_id;
+            });
+        }
+
+        filter.model = model;
+        filter.mode = mode;
+        filter.is_consumed = false;
+        tips = _.where(self.tips, filter);
+        // To take into account a tip without fixed model : e.g. a generic tip on the breadcrumb
+        tips = tips.concat(_.where(self.tips, {mode: mode, is_consumed: false, model:false}))
+
+        if (type) {
+            tips = _.filter(tips, function(tip) {
+                if (!tip.type) {
+                    return true;
+                }
+                return tip.type === type;
+            });
+        }
+
+        valid_tips = _.uniq(valid_tips.concat(tips));
+        _.each(valid_tips, function(tip) {
+            if (!tip.is_consumed) {
+                var t = new Tip(tip);
+                t.do_tip();
             }
-        },
+        });
+    },
 
-        _set_helper_position : function() {
-            var offset = this.$element.offset();
-            var _top = offset.top - 5;
-            var _left = offset.left - 5;
-            var _width = this.$element.outerWidth() + 10;
-            var _height = this.$element.outerHeight() + 10;
-            this.$helper.offset({top: _top , left: _left});
-            this.$helper.width(_width);
-            this.$helper.height(_height);
-        }
-    });
+    remove_tips: function() {
+        $('.oe_breathing').remove();
+    },
+});
 
-    instance.web.WebClient = instance.web.WebClient.extend({
-        show_application: function() {
-            this._super();
-            this.tip_handler = new instance.web.Tip();
-        }
-    });
+var Tip = Class.extend({
+    init: function(tip) {
+        this.tip = tip;
 
-    instance.web.form.FieldStatus = instance.web.form.FieldStatus.extend({
-        render_value: function() {
-            this._super();
-            instance.webclient.tip_handler.reposition();
+        this.highlight_selector = tip.highlight_selector;
+        this.end_selector = tip.end_selector ? tip.end_selector : tip.highlight_selector;
+        this.triggers = tip.trigger_selector ? tip.trigger_selector.split(',') : [];
+    },
+
+    do_tip: function() {
+        var self = this;
+
+        if(!$(this.highlight_selector).length > 0 || !$(this.highlight_selector).is(":visible")) {
+            return false;
         }
-    });
-})();
+
+        for (var i = 0; i < this.triggers.length; i++) {
+            if(!$(this.triggers[i]).length > 0) {
+                return false;
+            }
+        }
+
+        this.$element = $(this.highlight_selector).first();
+        if (utils.float_is_zero(this.$element.height(), 1) || utils.float_is_zero(this.$element.width(), 1)) {
+            var $images = this.$element.find('img');
+            if ($images.length > 0) {
+                $images.first().load(function() {
+                    var t = new Tip(self.tip);
+                    t.do_tip();
+                    bus.trigger('image_loaded');
+                });
+            }
+            return false;
+        }
+
+        if (!this.$element.next().hasClass('oe_breathing')) {
+            this.$breathing = $("<div>", { class: 'oe_breathing' });
+            this.$element.after(this.$breathing);
+        } else {
+            this.$breathing = this.$element.next();
+        }
+        this._set_breathing_position();
+
+        this.$breathing.on('click', function(e) {
+            e.stopImmediatePropagation();
+            self.$breathing.addClass('oe_explode');
+            self.trigger_tip();
+        });
+
+        // resize
+        bus.on('resize', this, function() {
+            self._set_breathing_position();
+        });
+
+        bus.on('image_loaded', this, function() {
+            self._set_breathing_position();
+        });
+
+        bus.on('please_reposition_tip', this, function() {
+            self._set_breathing_position();
+        });
+
+        return true;
+    },
+
+    trigger_tip: function() {
+        var self = this;
+
+        this.$helper = $("<div>", { class: 'oe_tip_helper' });
+        this.$overlay = $("<div>", { class: 'oe_tip_overlay' });
+
+        this.$element.after(this.$helper);
+        this._set_helper_position();
+        this.scroll_to_tip();
+
+        var $bgElem = this.$element;
+        var bgColor = $bgElem.css('background-color');
+        while($bgElem.length > 0 && (bgColor === 'transparent' || bgColor === 'rgba(0, 0, 0, 0)')) {
+            $bgElem = $bgElem.parent();
+            bgColor = $bgElem.css('background-color');
+        }
+        this.$helper.css('background-color', bgColor || "white");
+
+        $('body').append(this.$overlay);
+        this.$element.addClass('oe_tip_show_element');
+
+        // fix the stacking context problem
+        _.each(this.$element.parentsUntil('body'), function(el) {
+            var zIndex = $(el).css('z-index');
+            var opacity = parseFloat($(el).css('opacity'));
+
+            if (/[0-9]+/.test(zIndex) || opacity < 1) {
+                $(el).addClass('oe_tip_fix_parent');
+            }
+        });
+
+        this.$element.popover({
+            placement: self.tip.placement,
+            title: self.tip.title,
+            content: self.tip.description,
+            html: true,
+            container: 'body',
+            animation: false,
+        }).popover('show');
+
+        this.$cross = $('<button type="button" class="close oe_tip_close">&times;</button>');
+
+        if (this.tip.title) {
+            $('.popover-title').prepend(this.$cross);
+        } else {
+            $('.popover-content').prepend(this.$cross);
+        }
+
+        // consume tip
+        $(this.end_selector).one(this.tip.end_event, function($ev) {
+            self.end_tip();
+        });
+
+        // dismiss tip
+        this.$cross.on('click', function($ev) {
+            self.end_tip();
+        });
+        this.$overlay.on('click', function($ev) {
+            self.end_tip();
+        });
+        $(document).on('keyup.web_tip', function($ev) {
+            if ($ev.which === 27) { // esc
+                self.end_tip();
+            }
+        });
+
+        // resize
+        bus.on('resize', this, function() {
+            self._set_popover_position();
+        });
+    },
+
+    scroll_to_tip: function(){
+        var scroll = _.find(this.$element.parentsUntil('body'), function(el) {
+            var overflow = $(el).css('overflow-y');
+            return (overflow === 'auto' || overflow === 'scroll');
+        });
+        if (scroll) {
+            $(scroll).scrollTo(this.$element);
+        }
+    },
+
+    end_tip: function() {
+        var Tips = new Model('web.tip');
+
+        this.$element.popover('destroy');
+        this.$element.removeClass('oe_tip_show_element');
+        this.$breathing.remove();
+        this.$helper.remove();
+        this.$overlay.remove();
+        this.$cross.remove();
+
+        _.each($('.oe_tip_fix_parent'), function(el) {
+            $(el).removeClass('oe_tip_fix_parent');
+        });
+        $(document).off('keyup.web_tip');
+
+        Tips.call('consume', [this.tip.id], {});
+        this.tip.is_consumed = true;
+    },
+
+    _set_breathing_position: function() {
+        this.$breathing.position({ my: "center", at: "center", of: this.$element });
+    },
+
+    _set_helper_position: function() {
+        var offset = this.$element.offset();
+        var _top = offset.top - 5;
+        var _left = offset.left - 5;
+        var _width = this.$element.outerWidth() + 10;
+        var _height = this.$element.outerHeight() + 10;
+
+        this.$helper.offset({top: _top, left: _left});
+        this.$helper.css('width', _width);
+        this.$helper.css('height', _height);
+    },
+
+    _set_popover_position: function() {
+        if (!this.tip.is_consumed) {
+            this.$element.popover('show');
+            this._set_helper_position();
+            this.scroll_to_tip();
+
+            if (this.tip.title) {
+                $('.popover-title').prepend(this.$cross);
+            } else {
+                $('.popover-content').prepend(this.$cross);
+            }
+        }
+    },
+});
+
+WebClient.include({
+    show_application: function() {
+        this._super();
+        this.tips_handler = new Tips();
+    }
+});
+
+var FieldStatus = core.form_widget_registry.get('statusbar');
+
+FieldStatus.include({
+    render_value: function() {
+        this._super();
+        this.trigger('please_reposition_tip');
+    }
+});
+
+});

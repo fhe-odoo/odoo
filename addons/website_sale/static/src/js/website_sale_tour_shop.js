@@ -1,9 +1,15 @@
-(function () {
-    'use strict';
+odoo.define('website_sale.tour_shop', function (require) {
+'use strict';
 
-    var _t = openerp._t;
+var core = require('web.core');
+var Tour = require('web.Tour');
+var base = require('web_editor.base');
+var website = require('website.website');
 
-    openerp.Tour.register({
+var _t = core._t;
+
+base.ready().done(function () {
+    Tour.register({
         id: 'shop',
         name: _t("Create a product"),
         steps: [
@@ -13,8 +19,8 @@
                 popover:   { next: _t("Start Tutorial"), end: _t("Skip It") },
             },
             {
-                element:   '#content-menu-button',
-                placement: 'left',
+                element:   '#oe_main_menu_navbar a[data-action=new_page]',
+                placement: 'bottom',
                 title:     _t("Create your first product"),
                 content:   _t("Click here to add a new product."),
                 popover:   { fixed: true },
@@ -23,85 +29,81 @@
                 element:   'a[data-action=new_product]',
                 placement: 'left',
                 title:     _t("Create a new product"),
-                content:   _t("Select 'New Product' to create it and manage its properties to boost your sales."),
+                content:   _t("Select <em>New Product</em> to create it and manage its properties to boost your sales."),
                 popover:   { fixed: true },
             },
             {
-                element:   '.modal #editor_new_product input[type=text]',
+                element:   '.modal-dialog #editor_new_product input[type=text]',
                 sampleText: 'New Product',
                 placement: 'right',
                 title:     _t("Choose name"),
-                content:   _t("Enter a name for your new product then click 'Continue'."),
+                content:   _t("Enter a name for your new product"),
             },
             {
-                waitNot:   '.modal input[type=text]:not([value!=""])',
-                element:   '.modal button.btn-primary',
+                waitNot:   '.modal-dialog #editor_new_product input[type=text]:not([value!=""])',
+                element:   '.modal-dialog button.btn-primary.btn-continue',
                 placement: 'right',
                 title:     _t("Create Product"),
-                content:   _t("Click <em>Continue</em> to create the product."),
+                content:   _t("Click on <em>Continue</em> to create the product."),
             },
             {
-                waitFor:   'body:has(button[data-action=save]:visible):has(.js_sale)',
+                waitFor:   '#o_scroll .oe_snippet',
                 title:     _t("New product created"),
                 content:   _t("This page contains all the information related to the new product."),
                 popover:   { next: _t("Continue") },
             },
             {
-                element:   '.product_price .oe_currency_value:visible',
+                element:   '.product_price .oe_currency_value:visible:first',
                 sampleText: '20.50',
-                placement: 'left',
+                placement: 'bottom',
                 title:     _t("Change the price"),
                 content:   _t("Edit the price of this product by clicking on the amount."),
             },
             {
-                waitNot:   '.product_price .oe_currency_value:visible:containsExact(1.00)',
-                waitFor:   '#snippet_structure',
+                waitNot:   '.product_price .oe_currency_value:visible:first:containsExact(1.00)',
                 element:   '#wrap img.product_detail_img',
                 placement: 'top',
                 title:     _t("Update image"),
                 content:   _t("Click here to set an image describing your product."),
             },
             {
-                element:   'img[alt=ipad]',
+                element:   '.modal .o_existing_attachment_cell:nth(2) img',
                 placement: 'top',
-                title:     _t("Select an Image"),
-                content:   _t("Let's select an ipad image."),
+                title:     _t("Choose an image"),
+                content:   _t("Choose an image from the library."),
+                popover:   { fixed: true },
+                onload: function () {
+                    $('form[action="/web_editor/attachment/add"] .well > *').hide();
+                }
             },
             {
-                waitFor:   '.media_selected img[alt=ipad]',
-                element:   '.modal-content button.save',
-                placement: 'top',
-                title:     _t("Save this Image"),
-                content:   _t("Click on save to add the image to the product decsription."),
+                element:   '.modal .btn.save',
+                placement: 'right',
+                waitFor:   '.o_existing_attachment_cell.o_selected',
+                title:       _t("Save"),
+                content:     _t("Click on <em>Save</em> to add the image to the product description."),
             },
             {
                 waitNot:   '.modal-content:visible',
-                element:   'button[data-action=snippet]',
-                placement: 'bottom',
-                title:     _t("Describe the Product"),
-                content:   _t("Insert blocks like text-image, or gallery to fully describe the product."),
-                popover:   { fixed: true },
-            },
-            {
-                snippet:   '#snippet_structure .oe_snippet:eq(7)',
+                snippet:   '#snippet_structure .oe_snippet:eq(8)',
                 placement: 'bottom',
                 title:     _t("Drag & Drop a block"),
-                content:   _t("Drag the 'Big Picture' block and drop it in your page."),
+                content:   _t("Drag this website block and drop it in your page."),
                 popover:   { fixed: true },
             },
             {
                 element:   'button[data-action=save]',
-                placement: 'right',
+                placement: 'bottom',
                 title:     _t("Save your modifications"),
-                content:   _t("Once you click on save, your product is updated."),
+                content:   _t("Once you click on <em>Save</em>, your product is updated."),
                 popover:   { fixed: true },
             },
             {
-                waitFor:   '#website-top-navbar:hidden',
+                waitNot:   '#web_editor-top-edit',
                 element:   '.js_publish_management button.js_publish_btn.btn-danger',
                 placement: 'top',
                 title:     _t("Publish your product"),
-                content:   _t("Click to publish your product so your customers can see it."),
+                content:   _t("Click on <em>Publish</em> your product so your customers can see it."),
             },
             {
                 waitFor:   '.js_publish_management button.js_publish_btn.btn-success:visible',
@@ -111,5 +113,6 @@
             },
         ]
     });
+});
 
-}());
+});

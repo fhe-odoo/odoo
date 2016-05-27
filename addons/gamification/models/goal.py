@@ -1,29 +1,12 @@
 # -*- coding: utf-8 -*-
-##############################################################################
-#
-#    OpenERP, Open Source Management Solution
-#    Copyright (C) 2013 OpenERP SA (<http://www.openerp.com>)
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU General Public License as published by
-#    the Free Software Foundation, either version 3 of the License, or
-#    (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU General Public License for more details.
-#
-#    You should have received a copy of the GNU General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>
-#
-##############################################################################
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from openerp import SUPERUSER_ID
-from openerp.osv import fields, osv
+from openerp.osv import fields, osv, expression
 from openerp.tools import DEFAULT_SERVER_DATE_FORMAT as DF
 from openerp.tools.safe_eval import safe_eval
 from openerp.tools.translate import _
+from openerp.exceptions import UserError
 
 import logging
 import time
@@ -81,8 +64,6 @@ class gamification_goal_definition(osv.Model):
         'model_id': fields.many2one('ir.model',
             string='Model',
             help='The model object for the field to evaluate'),
-        'model_inherited_model_ids': fields.related('model_id', 'inherited_model_ids', type="many2many", obj="ir.model",
-            string="Inherited models", readonly="True"),
         'field_id': fields.many2one('ir.model.fields',
             string='Field to Sum',
             help='The field containing the value to evaluate'),
@@ -145,30 +126,51 @@ class gamification_goal_definition(osv.Model):
                 obj.search(cr, uid, domain, context=context, count=True)
             except (ValueError, SyntaxError), e:
                 msg = e.message or (e.msg + '\n' + e.text)
-                raise osv.except_osv(_('Error!'),_("The domain for the definition %s seems incorrect, please check it.\n\n%s" % (definition.name, msg)))
+                raise UserError(_("The domain for the definition %s seems incorrect, please check it.\n\n%s") % (definition.name, msg))
         return True
+
+    def _check_model_validity(self, cr, uid, ids, context=None):
+        """ make sure the selected field and model are usable"""
+        for definition in self.browse(cr, uid, ids, context=context):
+            try:
+                if not definition.model_id or not definition.field_id:
+                    continue
+
+                model = self.pool[definition.model_id.model]
+                field = model._fields[definition.field_id.name]
+                if not field.store:
+                    raise UserError(
+                        _("The model configuration for the definition %s seems incorrect, please check it.\n\n%s not stored") % (definition.name, definition.field_id.name))
+            except KeyError, e:
+                raise UserError(
+                    _("The model configuration for the definition %s seems incorrect, please check it.\n\n%s not found") % (definition.name, e.message))
 
     def create(self, cr, uid, vals, context=None):
         res_id = super(gamification_goal_definition, self).create(cr, uid, vals, context=context)
         if vals.get('computation_mode') in ('count', 'sum'):
             self._check_domain_validity(cr, uid, [res_id], context=context)
-
+        if vals.get('field_id'):
+            self._check_model_validity(cr, uid, [res_id], context=context)
         return res_id
 
     def write(self, cr, uid, ids, vals, context=None):
         res = super(gamification_goal_definition, self).write(cr, uid, ids, vals, context=context)
         if vals.get('computation_mode', 'count') in ('count', 'sum') and (vals.get('domain') or vals.get('model_id')):
             self._check_domain_validity(cr, uid, ids, context=context)
-
+        if vals.get('field_id') or vals.get('model_id') or vals.get('batch_mode'):
+            self._check_model_validity(cr, uid, ids, context=context)
         return res
 
     def on_change_model_id(self, cr, uid, ids, model_id, context=None):
-        """Prefill field model_inherited_model_ids"""
+        """Force domain for the `field_id` and `field_date_id` fields"""
         if not model_id:
-            return {'value': {'model_inherited_model_ids': []}}
+            return {'domain': {'field_id': expression.FALSE_DOMAIN, 'field_date_id': expression.FALSE_DOMAIN}}
         model = self.pool['ir.model'].browse(cr, uid, model_id, context=context)
-        # format (6, 0, []) to construct the domain ('model_id', 'in', m and m[0] and m[0][2])
-        return {'value': {'model_inherited_model_ids': [(6, 0, [m.id for m in model.inherited_model_ids])]}}
+        model_fields_domain = [('store', '=', True),
+                                '|', ('model_id', '=', model_id), ('model_id', 'in', model.inherited_model_ids.ids)]
+        model_date_fields_domain = expression.AND([[('ttype', 'in', ('date', 'datetime'))], model_fields_domain])
+        return {'domain': {'field_id': model_fields_domain, 'field_date_id': model_date_fields_domain}}
+
 
 class gamification_goal(osv.Model):
     """Goal instance for a user
@@ -256,19 +258,40 @@ class gamification_goal(osv.Model):
 
         :return: data to write on the goal object
         """
+        temp_obj = self.pool['mail.template']
         if goal.remind_update_delay and goal.last_update:
             delta_max = timedelta(days=goal.remind_update_delay)
             last_update = datetime.strptime(goal.last_update, DF).date()
             if date.today() - last_update > delta_max:
                 # generate a remind report
-                temp_obj = self.pool.get('email.template')
-                template_id = self.pool['ir.model.data'].get_object(cr, uid, 'gamification', 'email_template_goal_reminder', context)
-                body_html = temp_obj.render_template(cr, uid, template_id.body_html, 'gamification.goal', goal.id, context=context)
+                temp_obj = self.pool.get('mail.template')
+                template_id = self.pool['ir.model.data'].get_object_reference(cr, uid, 'gamification', 'email_template_goal_reminder')[0]
+                template = temp_obj.get_email_template(cr, uid, template_id, goal.id, context=context)
+                body_html = temp_obj.render_template(cr, uid, template.body_html, 'gamification.goal', goal.id, context=template._context)
                 self.pool['mail.thread'].message_post(cr, uid, 0, body=body_html, partner_ids=[goal.user_id.partner_id.id], context=context, subtype='mail.mt_comment')
                 return {'to_update': True}
         return {}
 
-    def update(self, cr, uid, ids, context=None):
+    def _get_write_values(self, cr, uid, goal, new_value, context=None):
+        """Generate values to write after recomputation of a goal score"""
+        if new_value == goal.current:
+            # avoid useless write if the new value is the same as the old one
+            return {}
+
+        result = {goal.id: {'current': new_value}}
+        if (goal.definition_id.condition == 'higher' and new_value >= goal.target_goal) \
+          or (goal.definition_id.condition == 'lower' and new_value <= goal.target_goal):
+            # success, do no set closed as can still change
+            result[goal.id]['state'] = 'reached'
+
+        elif goal.end_date and fields.date.today() > goal.end_date:
+            # check goal failure
+            result[goal.id]['state'] = 'failed'
+            result[goal.id]['closed'] = True
+
+        return result
+
+    def update_goal(self, cr, uid, ids, context=None):
         """Update the goals to recomputes values and change of states
 
         If a manual goal is not updated for enough time, the user will be
@@ -281,14 +304,8 @@ class gamification_goal(osv.Model):
         commit = context.get('commit_gamification', False)
 
         goals_by_definition = {}
-        all_goals = {}
         for goal in self.browse(cr, uid, ids, context=context):
-            if goal.state in ('draft', 'canceled'):
-                # draft or canceled goals should not be recomputed
-                continue
-
             goals_by_definition.setdefault(goal.definition_id, []).append(goal)
-            all_goals[goal.id] = goal
 
         for definition, goals in goals_by_definition.items():
             goals_to_write = dict((goal.id, {}) for goal in goals)
@@ -313,10 +330,12 @@ class gamification_goal(osv.Model):
                     # the result of the evaluated codeis put in the 'result' local variable, propagated to the context
                     result = cxt.get('result')
                     if result is not None and type(result) in (float, int, long):
-                        if result != goal.current:
-                            goals_to_write[goal.id]['current'] = result
+                        goals_to_write.update(
+                            self._get_write_values(cr, uid, goal, result, context=context)
+                        )
+
                     else:
-                        _logger.exception(_('Invalid return content from the evaluation of code for definition %s' % definition.name))
+                        _logger.exception(_('Invalid return content from the evaluation of code for definition %s') % definition.name)
 
             else:  # count or sum
 
@@ -356,8 +375,9 @@ class gamification_goal(osv.Model):
                                     queried_value = queried_value[0]
                                 if queried_value == query_goals[goal.id]:
                                     new_value = user_value.get(field_name+'_count', goal.current)
-                                    if new_value != goal.current:
-                                        goals_to_write[goal.id]['current'] = new_value
+                                    goals_to_write.update(
+                                        self._get_write_values(cr, uid, goal, new_value, context=context)
+                                    )
 
                 else:
                     for goal in goals:
@@ -379,26 +399,14 @@ class gamification_goal(osv.Model):
                         else:  # computation mode = count
                             new_value = obj.search(cr, uid, domain, context=context, count=True)
 
-                        # avoid useless write if the new value is the same as the old one
-                        if new_value != goal.current:
-                            goals_to_write[goal.id]['current'] = new_value
+                        goals_to_write.update(
+                            self._get_write_values(cr, uid, goal, new_value, context=context)
+                        )
 
             for goal_id, value in goals_to_write.items():
                 if not value:
                     continue
-                goal = all_goals[goal_id]
-
-                # check goal target reached
-                if (goal.definition_id.condition == 'higher' and value.get('current', goal.current) >= goal.target_goal) \
-                  or (goal.definition_id.condition == 'lower' and value.get('current', goal.current) <= goal.target_goal):
-                    value['state'] = 'reached'
-
-                # check goal failure
-                elif goal.end_date and fields.date.today() > goal.end_date:
-                    value['state'] = 'failed'
-                    value['closed'] = True
-                if value:
-                    self.write(cr, uid, [goal.id], value, context=context)
+                self.write(cr, uid, [goal_id], value, context=context)
             if commit:
                 cr.commit()
         return True
@@ -408,7 +416,7 @@ class gamification_goal(osv.Model):
 
         This should only be used when creating goals manually (in draft state)"""
         self.write(cr, uid, ids, {'state': 'inprogress'}, context=context)
-        return self.update(cr, uid, ids, context=context)
+        return self.update_goal(cr, uid, ids, context=context)
 
     def action_reach(self, cr, uid, ids, context=None):
         """Mark a goal as reached.
@@ -450,7 +458,7 @@ class gamification_goal(osv.Model):
         for goal in self.browse(cr, uid, ids, context=context):
             if goal.state != "draft" and ('definition_id' in vals or 'user_id' in vals):
                 # avoid drag&drop in kanban view
-                raise osv.except_osv(_('Error!'), _('Can not modify the configuration of a started goal'))
+                raise UserError(_('Can not modify the configuration of a started goal'))
 
             if vals.get('current'):
                 if 'no_remind_goal' in context:

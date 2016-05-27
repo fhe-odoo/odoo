@@ -111,6 +111,12 @@ class test_ids_stuff(ImporterCase):
         self.import_(['id', 'value'], [['somexmlid', '1234567']])
         self.assertEqual([1234567], values(self.read()))
 
+    def test_wrong_format(self):
+        self.assertEqual(
+            self.import_(['value'], [['50%']]),
+            error(1, u"'50%' does not seem to be an integer for field 'unknown'"))
+
+
 class test_boolean_field(ImporterCase):
     model_name = 'export.boolean'
 
@@ -163,10 +169,13 @@ class test_boolean_field(ImporterCase):
                 # Problem: OpenOffice (and probably excel) output localized booleans
                 ['VRAI'],
                 [u'OFF'],
+                [u'是的'],
+                ['!&%#${}'],
+                ['%(field)s'],
             ]),
-            ok(8))
+            ok(11))
         self.assertEqual(
-            [True] * 8,
+            [True] * 11,
             values(self.read()))
 
 class test_integer_field(ImporterCase):
@@ -385,14 +394,7 @@ class test_selection(ImporterCase):
         self.assertEqual([3, 2, 1, 2], values(self.read()))
 
     def test_imported_translated(self):
-        self.registry('res.lang').create(self.cr, openerp.SUPERUSER_ID, {
-            'name': u'Français',
-            'code': 'fr_FR',
-            'translatable': True,
-            'date_format': '%d.%m.%Y',
-            'decimal_point': ',',
-            'thousands_sep': ' ',
-        })
+        self.registry('res.lang').load_lang(self.cr, openerp.SUPERUSER_ID, 'fr_FR')
         Translations = self.registry('ir.translation')
         for source, value in self.translations_fr:
             Translations.create(self.cr, openerp.SUPERUSER_ID, {
@@ -452,14 +454,7 @@ class test_selection_function(ImporterCase):
     def test_translated(self):
         """ Expects output of selection function returns translated labels
         """
-        self.registry('res.lang').create(self.cr, openerp.SUPERUSER_ID, {
-            'name': u'Français',
-            'code': 'fr_FR',
-            'translatable': True,
-            'date_format': '%d.%m.%Y',
-            'decimal_point': ',',
-            'thousands_sep': ' ',
-        })
+        self.registry('res.lang').load_lang(self.cr, openerp.SUPERUSER_ID, 'fr_FR')
         Translations = self.registry('ir.translation')
         for source, value in self.translations_fr:
             Translations.create(self.cr, openerp.SUPERUSER_ID, {

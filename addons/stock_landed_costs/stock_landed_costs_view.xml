@@ -17,7 +17,7 @@
                         <div class="oe_title">
                             <label for="name" class="oe_edit_only"/>
                             <h1>
-                                <field name="name" class="oe_inline"/>
+                                <field name="name" placeholder="Landed Cost Name"/>
                             </h1>
                         </div>
                         <group>
@@ -30,74 +30,66 @@
                                 <field name="account_move_id"/>
                             </group>
                         </group>
-                        <group>
-                            <separator string="Cost Lines" colspan="4"/>
-                            <group>
-                                <field name="cost_lines" nolabel="1">
-                                    <form string="Cost Lines">
-                                        <group>
-                                            <group>
-                                                <field name="product_id"
-                                                    on_change="onchange_product_id(product_id)" domain="[('landed_cost_ok', '=', True)]" context="{'default_landed_cost_ok': True, 'form_view_ref':'stock_landed_costs.view_stock_landed_cost_type_form'}"/>
-                                                <field name="price_unit"/>
-                                            </group>
-                                            <group>
-                                                <field name="split_method"/>
-                                                <field name="account_id"/>
-                                            </group>
-                                        </group>
-                                        <label for="name"/>
-                                        <field name="name"/>
-                                    </form>
-                                    <tree string="Cost Lines" editable="bottom">
-                                        <field name="product_id" on_change="onchange_product_id(product_id)" domain="[('landed_cost_ok', '=', True)]" context="{'default_landed_cost_ok': True, 'form_view_ref':'stock_landed_costs.view_stock_landed_cost_type_form'}"/>
-                                        <field name="name"/>
-                                        <field name="account_id"/>
-                                        <field name="split_method"/>
+
+                        <separator string="Cost Lines"/>
+                        <p class="oe_grey">
+                            Landed cost are computed based on the purchase unit of measure.
+                        </p>
+                        <field name="cost_lines">
+                            <form string="Cost Lines">
+                                <group>
+                                    <group>
+                                        <field name="product_id"
+                                            on_change="onchange_product_id(product_id)" domain="[('landed_cost_ok', '=', True)]" context="{'default_landed_cost_ok': True, 'form_view_ref':'stock_landed_costs.view_stock_landed_cost_type_form'}"/>
                                         <field name="price_unit"/>
-                                    </tree>
-                                </field>
-                            </group>
-                        </group>
+                                    </group>
+                                    <group>
+                                        <field name="split_method"/>
+                                        <field name="account_id"/>
+                                    </group>
+                                </group>
+                                <label for="name"/>
+                                <field name="name"/>
+                            </form>
+                            <tree string="Cost Lines" editable="bottom">
+                                <field name="product_id" on_change="onchange_product_id(product_id)" domain="[('landed_cost_ok', '=', True)]" context="{'default_landed_cost_ok': True, 'form_view_ref':'stock_landed_costs.view_stock_landed_cost_type_form'}"/>
+                                <field name="name"/>
+                                <field name="account_id"/>
+                                <field name="split_method"/>
+                                <field name="price_unit"/>
+                            </tree>
+                        </field>
                         <group class="oe_subtotal_footer oe_right">
-                            <field name="amount_total"/>
+                            <field name="amount_total" widget="monetary"/>
+                            <button colspan="2" name="compute_landed_cost" string="Compute" type="object" class="oe_right btn-default" states='draft'/>
                         </group>
-                        <group>
-                            <group>
-                                <separator string="Valuation Adjustments"/>
-                            </group>
-                            <group>
-                                <button name="compute_landed_cost" string="Compute" type="object" class="oe_right"/>
-                            </group>
-                        </group>
-                        <group>
-                            <group>
-                                <field name="valuation_adjustment_lines" nolabel="1">
-                                    <form string="Valuation Adjustments">
-                                        <group>
-                                            <group>
-                                                <field name="product_id"/>
-                                                <field name="quantity"/>
-                                            </group>
-                                            <group>
-                                                <field name="former_cost"/>
-                                                <field name="additional_landed_cost"/>
-                                            </group>
-                                        </group>
-                                    </form>
-                                    <tree string="Valuation Adjustments" editable="bottom" create="0">
-                                        <field name="cost_line_id" readonly="1"/>
-                                        <field name="product_id" readonly="1"/>
-                                        <field name="weight" readonly="1"/>
-                                        <field name="volume" readonly="1"/>
-                                        <field name="quantity" readonly="1"/>
-                                        <field name="former_cost_per_unit" readonly="1"/>
-                                        <field name="former_cost" readonly="1"/>
+
+                        <div class="oe_clear"/>
+                        <separator string="Valuation Adjustments"/>
+                        <field name="valuation_adjustment_lines">
+                            <form string="Valuation Adjustments">
+                                <group>
+                                    <group>
+                                        <field name="product_id"/>
+                                        <field name="quantity"/>
+                                    </group>
+                                    <group>
+                                        <field name="former_cost"/>
                                         <field name="additional_landed_cost"/>
-                                    </tree>
-                                </field>
-                            </group>
-                        </group>
+                                    </group>
+                                </group>
+                            </form>
+                            <tree string="Valuation Adjustments" editable="bottom" create="0">
+                                <field name="cost_line_id" readonly="1"/>
+                                <field name="product_id" readonly="1"/>
+                                <field name="weight" readonly="1"/>
+                                <field name="volume" readonly="1"/>
+                                <field name="quantity" readonly="1"/>
+                                <field name="former_cost_per_unit" readonly="1" widget="monetary"/>
+                                <field name="former_cost" readonly="1"/>
+                                <field name="additional_landed_cost"/>
+                            </tree>
+                        </field>
                     </sheet>
                     <div class="oe_chatter">
                         <field name="message_follower_ids" widget="mail_followers"/>
@@ -154,8 +146,7 @@
         </record>
 
         <!-- Stock Landed Cost Menu -->
-        <menuitem name="Landed Costs" parent="stock.menu_stock_root" id="menu_stock_landed_cost_main" sequence="1"/>
-        <menuitem action="action_stock_landed_cost" name="Landed Costs" parent="menu_stock_landed_cost_main" id="menu_stock_landed_cost" sequence="1"/>
+        <menuitem action="action_stock_landed_cost" name="Landed Costs" parent="stock.menu_stock_inventory_control" id="menu_stock_landed_cost" sequence="99"/>
 
         <!-- Stock Landed Cost Type View -->
         <record id="view_stock_landed_cost_type_form" model="ir.ui.view">
@@ -165,13 +156,13 @@
             <field name="arch" type="xml">
                 <form string="Landed Costs">
                     <sheet>
-                        <field name="image_medium" widget="image" class="oe_avatar oe_left"/>
+                        <field name="image_medium" widget="image" class="oe_avatar"/>
                         <div class="oe_title">
                             <div class="oe_edit_only">
                                 <label for="name" name='label_name' string="Product Name"/>
                             </div>
                             <h1>
-                                <field name="name" class="oe_inline"/>
+                                <field name="name"/>
                             </h1>
                             <label for="categ_id" class="oe_edit_only"/>
                             <h2>
@@ -190,10 +181,10 @@
                                     <group>
                                         <field name="split_method"/>
                                         <field name="standard_price"/>
-                                        <field name="property_account_expense"/>
+                                        <field name="property_account_expense_id" domain="[('internal_type','=','other'),('deprecated', '=', False)]"/>
                                     </group>
                                     <group>
-                                        <field name="company_id" groups="base.group_multi_company" widget="selection"/>
+                                        <field name="company_id" groups="base.group_multi_company" options="{'no_create': True}"/>
                                         <field name="type"/>
                                     </group>
                                 </group>
@@ -251,7 +242,7 @@
            <field name="act_window_id" ref="stock_landed_cost_type_action"/>
         </record>
 
-	<menuitem action="stock_landed_cost_type_action" name="Landed Cost Type" parent="stock.menu_warehouse_config" id="menu_stock_landed_cost_type" sequence="5"/>
+	<menuitem action="stock_landed_cost_type_action" name="Landed Cost Type" parent="stock.menu_warehouse_config" id="menu_stock_landed_cost_type" sequence="3"/>
 
     </data>
 </openerp>

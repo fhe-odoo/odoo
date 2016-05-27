@@ -1,27 +1,9 @@
 # -*- coding: utf-8 -*-
-##############################################################################
-#
-#    OpenERP, Open Source Management Solution
-#    Copyright (C) 2004-2010 Tiny SPRL (<http://tiny.be>).
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as
-#    published by the Free Software Foundation, either version 3 of the
-#    License, or (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU Affero General Public License for more details.
-#
-#    You should have received a copy of the GNU Affero General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-##############################################################################
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-from openerp.osv import fields,osv
+from openerp.osv import fields, osv
 from openerp import tools
-from openerp.addons.crm import crm
+from openerp.addons.crm import crm_stage
 
 
 class crm_lead_report_assign(osv.osv):
@@ -45,13 +27,13 @@ class crm_lead_report_assign(osv.osv):
         'probability_max': fields.float('Max Probability',digits=(16,2),readonly=True, group_operator="max"),
         'planned_revenue': fields.float('Planned Revenue',digits=(16,2),readonly=True),
         'probable_revenue': fields.float('Probable Revenue', digits=(16,2),readonly=True),
-        'stage_id': fields.many2one ('crm.stage', 'Stage', domain="[('team_ids', '=', team_id)]"),
+        'tag_ids': fields.many2many('crm.lead.tag', 'crm_lead_tag_rel', 'lead_id', 'tag_id', 'Tags'),
         'partner_id': fields.many2one('res.partner', 'Customer' , readonly=True),
         'opening_date': fields.datetime('Opening Date', readonly=True),
         'date_closed': fields.datetime('Close Date', readonly=True),
         'nbr': fields.integer('# of Cases', readonly=True),  # TDE FIXME master: rename into nbr_cases
         'company_id': fields.many2one('res.company', 'Company', readonly=True),
-        'priority': fields.selection(crm.AVAILABLE_PRIORITIES, 'Priority'),
+        'priority': fields.selection(crm_stage.AVAILABLE_PRIORITIES, 'Priority'),
         'type':fields.selection([
             ('lead','Lead'),
             ('opportunity','Opportunity')
@@ -74,7 +56,6 @@ class crm_lead_report_assign(osv.osv):
                     c.user_id,
                     c.probability,
                     c.probability as probability_max,
-                    c.stage_id,
                     c.type,
                     c.company_id,
                     c.priority,
@@ -95,6 +76,3 @@ class crm_lead_report_assign(osv.osv):
                     crm_lead c
                     left join res_partner p on (c.partner_assigned_id=p.id)
             )""")
-
-
-# vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:

@@ -1,37 +1,18 @@
 # -*- coding: utf-8 -*-
-##############################################################################
-#
-#    OpenERP, Open Source Management Solution
-#    Copyright (C) 2004-2010 Tiny SPRL (<http://tiny.be>).
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as
-#    published by the Free Software Foundation, either version 3 of the
-#    License, or (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU Affero General Public License for more details.
-#
-#    You should have received a copy of the GNU Affero General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-##############################################################################
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 {
-    'name': 'Warehouse Management',
+    'name': 'Inventory Management',
     'version': '1.1',
-    'author': 'OpenERP SA',
-    'summary': 'Inventory, Logistic, Storage',
+    'summary': 'Inventory, Logistics, Warehousing',
     'description': """
 Manage multi-warehouses, multi- and structured stock locations
 ==============================================================
 
 The warehouse and inventory management is based on a hierarchical location structure, from warehouses to storage bins.
-The double entry inventory system allows you to manage customers, suppliers as well as manufacturing inventories.
+The double entry inventory system allows you to manage customers, vendors as well as manufacturing inventories.
 
-OpenERP has the capacity to manage lots and serial numbers ensuring compliance with the traceability requirements imposed by the majority of industries.
+Odoo has the capacity to manage lots and serial numbers ensuring compliance with the traceability requirements imposed by the majority of industries.
 
 Key Features
 ------------
@@ -41,7 +22,7 @@ Key Features
 * Rapid detection of mistakes through double entry system
 * Traceability (Serial Numbers, Packages, ...)
 
-Dashboard / Reports for Warehouse Management will include:
+Dashboard / Reports for Inventory Management will include:
 ----------------------------------------------------------
 * Incoming Products (Graph)
 * Outgoing Products (Graph)
@@ -51,53 +32,68 @@ Dashboard / Reports for Warehouse Management will include:
 * Moves Analysis
     """,
     'website': 'https://www.odoo.com/page/warehouse',
-    'images': ['images/stock_forecast_report.png', 'images/delivery_orders.jpeg', 'images/inventory_analysis.jpeg','images/location.jpeg','images/moves_analysis.jpeg','images/physical_inventories.jpeg'],
-    'depends': ['product', 'procurement', 'board', 'web_kanban_gauge', 'web_kanban_sparkline'],
-    'category': 'Warehouse Management',
-    'sequence': 16,
+    'depends': ['product', 'procurement', 'barcodes', 'web_planner'],
+    'category': 'Inventory Management',
+    'sequence': 13,
     'demo': [
-        'stock_demo_pre.yml',
-        'stock_demo.xml',
-        'procurement_demo.xml',
-        'stock_orderpoint.xml',
-        'stock_orderpoint.yml',
-        'stock_demo.yml',
-        'stock_location_demo_cpu1.xml',
-        'stock_location_demo_cpu3.yml',
+        'data/stock_demo_pre.yml',
+        'data/stock_demo.xml',
+        'data/procurement_demo.xml',
+        'data/stock_orderpoint_demo.xml',
+        'data/stock_orderpoint_demo.yml',
+        'data/stock_demo.yml',
+        'data/stock_location_demo_cpu1.xml',
+        'data/stock_location_demo_cpu3.yml',
     ],
     'data': [
         'security/stock_security.xml',
         'security/ir.model.access.csv',
-        'stock_data.xml',
-        'stock_data.yml',
-        'wizard/stock_move_view.xml',
-        'wizard/stock_change_product_qty_view.xml',
-        'wizard/stock_return_picking_view.xml',
-        'wizard/make_procurement_view.xml',
-        'wizard/orderpoint_procurement_view.xml',
-        'wizard/stock_transfer_details.xml',
-        'stock_incoterms.xml',
-        'stock_report.xml',
-        'stock_view.xml',
-        'stock_sequence.xml',
-        'product_view.xml',
-        'partner_view.xml',
+
+        'views/stock_menu_views.xml',
+
+        'report/report_stock_forecast.xml',
+        'report/stock_report_views.xml',
         'report/report_stock_view.xml',
-        'res_config_view.xml',
-        'views/report_package_barcode.xml',
-        'views/report_lot_barcode.xml',
-        'views/report_location_barcode.xml',
-        'views/report_stockpicking.xml',
-        'views/report_stockinventory.xml',
-        'views/stock.xml',
+        'report/report_package_barcode.xml',
+        'report/report_lot_barcode.xml',
+        'report/report_location_barcode.xml',
+        'report/report_stockpicking_operations.xml',
+        'report/report_deliveryslip.xml',
+        'report/report_stockinventory.xml',
+
+        'wizard/stock_move_scrap_views.xml',
+        'wizard/stock_change_product_qty_views.xml',
+        'wizard/stock_picking_return_views.xml',
+        'wizard/make_procurement_views.xml',
+        'wizard/procurement_orderpoint_compute_views.xml',
+        'wizard/stock_immediate_transfer_views.xml',
+        'wizard/stock_backorder_confirmation_views.xml',
+
+        'views/res_partner_views.xml',
+        'views/product_strategy_views.xml',
+        'views/stock_inventory_views.xml',
+        'views/stock_incoterms_views.xml',
+        'views/stock_production_lot_views.xml',
+        'views/stock_picking_views.xml',
+        'views/stock_quant_views.xml',
+        'views/stock_location_views.xml',
+        'views/procurement_views.xml',
+        'views/stock_warehouse_views.xml',
+        'views/stock_move_views.xml',
+        'views/stock_pack_operation_views.xml',
+        'views/product_views.xml',
+        'views/stock_config_settings_views.xml',
+
+        'data/default_barcode_patterns.xml',
+        'data/stock_data.xml',
+        'data/stock_data.yml',
+        'data/stock_incoterms_data.xml',
+        'data/stock_sequence_data.xml',
+        'data/web_planner_data.xml',
     ],
     'test': [
-        'test/inventory.yml',
-        'test/move.yml',
         'test/procrule.yml',
         'test/stock_users.yml',
-        'stock_demo.yml',
-        'test/shipment.yml',
         'test/packing.yml',
         'test/packingneg.yml',
         'test/wiseoperator.yml',
@@ -105,7 +101,4 @@ Dashboard / Reports for Warehouse Management will include:
     'installable': True,
     'application': True,
     'auto_install': False,
-    'qweb': ['static/src/xml/picking.xml'],
 }
-
-# vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:

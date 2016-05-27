@@ -10,25 +10,28 @@ KARMA = {
     'edit_own': 10, 'edit_all': 20,
     'close_own': 10, 'close_all': 20,
     'unlink_own': 10, 'unlink_all': 20,
+    'post': 100, 'flag': 500, 'moderate': 1000,
     'gen_que_new': 1, 'gen_que_upv': 5, 'gen_que_dwv': -10,
-    'gen_ans_upv': 10, 'gen_ans_dwv': -20,
+    'gen_ans_upv': 10, 'gen_ans_dwv': -20, 'gen_ans_flag': -45,
+    'tag_create': 30,
 }
 
 
-class TestForumCommon(common.TransactionCase):
+class TestForumCommon(common.SavepointCase):
 
-    def setUp(self):
-        super(TestForumCommon, self).setUp()
+    @classmethod
+    def setUpClass(cls):
+        super(TestForumCommon, cls).setUpClass()
 
-        Forum = self.env['forum.forum']
-        Post = self.env['forum.post']
+        Forum = cls.env['forum.forum']
+        Post = cls.env['forum.post']
 
         # Test users
-        TestUsersEnv = self.env['res.users'].with_context({'no_reset_password': True})
-        group_employee_id = self.ref('base.group_user')
-        group_portal_id = self.ref('base.group_portal')
-        group_public_id = self.ref('base.group_public')
-        self.user_employee = TestUsersEnv.create({
+        TestUsersEnv = cls.env['res.users'].with_context({'no_reset_password': True})
+        group_employee_id = cls.env.ref('base.group_user').id
+        group_portal_id = cls.env.ref('base.group_portal').id
+        group_public_id = cls.env.ref('base.group_public').id
+        cls.user_employee = TestUsersEnv.create({
             'name': 'Armande Employee',
             'login': 'Armande',
             'alias_name': 'armande',
@@ -36,7 +39,7 @@ class TestForumCommon(common.TransactionCase):
             'karma': 0,
             'groups_id': [(6, 0, [group_employee_id])]
         })
-        self.user_portal = TestUsersEnv.create({
+        cls.user_portal = TestUsersEnv.create({
             'name': 'Beatrice Portal',
             'login': 'Beatrice',
             'alias_name': 'beatrice',
@@ -44,7 +47,7 @@ class TestForumCommon(common.TransactionCase):
             'karma': 0,
             'groups_id': [(6, 0, [group_portal_id])]
         })
-        self.user_public = TestUsersEnv.create({
+        cls.user_public = TestUsersEnv.create({
             'name': 'Cedric Public',
             'login': 'Cedric',
             'alias_name': 'cedric',
@@ -54,7 +57,7 @@ class TestForumCommon(common.TransactionCase):
         })
 
         # Test forum
-        self.forum = Forum.create({
+        cls.forum = Forum.create({
             'name': 'TestForum',
             'karma_ask': KARMA['ask'],
             'karma_answer': KARMA['ans'],
@@ -70,6 +73,7 @@ class TestForumCommon(common.TransactionCase):
             'karma_close_all': KARMA['close_all'],
             'karma_unlink_own': KARMA['unlink_own'],
             'karma_unlink_all': KARMA['unlink_all'],
+            'karma_post': KARMA['post'],
             'karma_comment_convert_all': KARMA['com_conv_all'],
             'karma_gen_question_new': KARMA['gen_que_new'],
             'karma_gen_question_upvote': KARMA['gen_que_upv'],
@@ -78,16 +82,17 @@ class TestForumCommon(common.TransactionCase):
             'karma_gen_answer_downvote': KARMA['gen_ans_dwv'],
             'karma_gen_answer_accept': 9999,
             'karma_gen_answer_accepted': 9999,
+            'karma_gen_answer_flagged': KARMA['gen_ans_flag'],
         })
-        self.post = Post.create({
+        cls.post = Post.create({
             'name': 'TestQuestion',
             'content': 'I am not a bird.',
-            'forum_id': self.forum.id,
-            'tag_ids': [(0, 0, {'name': 'Tag0', 'forum_id': self.forum.id})]
+            'forum_id': cls.forum.id,
+            'tag_ids': [(0, 0, {'name': 'Tag2', 'forum_id': cls.forum.id})]
         })
-        self.answer = Post.create({
+        cls.answer = Post.create({
             'name': 'TestAnswer',
             'content': 'I am an anteater.',
-            'forum_id': self.forum.id,
-            'parent_id': self.post.id,
+            'forum_id': cls.forum.id,
+            'parent_id': cls.post.id,
         })

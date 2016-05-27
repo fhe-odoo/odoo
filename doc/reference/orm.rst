@@ -1,13 +1,20 @@
+:banner: banners/orm_api.jpg
+
 .. _reference/orm:
 
-===
-ORM
-===
+=======
+ORM API
+=======
 
 Recordsets
 ==========
 
 .. versionadded:: 8.0
+
+    This page documents the New API added in Odoo 8.0 which should be the
+    primary development API going forward. It also provides information about
+    porting from or bridging with the "old API" of versions 7 and earlier, but
+    does not explicitly document that API. See the old documentation for that.
 
 Interaction with models and records is performed through recordsets, a sorted
 set of records of the same model.
@@ -71,6 +78,45 @@ Accessing a relational field (:class:`~openerp.fields.Many2one`,
 
         # 1 database update
         records.write({'a': 1, 'b': 2, 'c': 3})
+
+Record cache and prefetching
+----------------------------
+
+Odoo maintains a cache for the fields of the records, so that not every field
+access issues a database request, which would be terrible for performance. The
+following example queries the database only for the first statement::
+
+    record.name             # first access reads value from database
+    record.name             # second access gets value from cache
+
+To avoid reading one field on one record at a time, Odoo *prefetches* records
+and fields following some heuristics to get good performance. Once a field must
+be read on a given record, the ORM actually reads that field on a larger
+recordset, and stores the returned values in cache for later use. The prefetched
+recordset is usually the recordset from which the record comes by iteration.
+Moreover, all simple stored fields (boolean, integer, float, char, text, date,
+datetime, selection, many2one) are fetched altogether; they correspond to the
+columns of the model's table, and are fetched efficiently in the same query.
+
+Consider the following example, where ``partners`` is a recordset of 1000
+records. Without prefetching, the loop would make 2000 queries to the database.
+With prefetching, only one query is made::
+
+    for partner in partners:
+        print partner.name          # first pass prefetches 'name' and 'lang'
+                                    # (and other fields) on all 'partners'
+        print partner.lang
+
+The prefetching also works on *secondary records*: when relational fields are
+read, their values (which are records) are  subscribed for future prefetching.
+Accessing one of those secondary records prefetches all secondary records from
+the same model. This makes the following example generate only two queries, one
+for partners and one for countries::
+
+    countries = set()
+    for partner in partners:
+        country = partner.country_id        # first pass prefetches all partners
+        countries.add(country.name)         # first pass prefetches all countries
 
 Set operations
 --------------
@@ -242,7 +288,7 @@ Common ORM methods
     <reference/orm/oldapi>`::
 
         >>> self.browse([7, 18, 12])
-        res.partner(7, 18, 12])
+        res.partner(7, 18, 12)
 
 :meth:`~openerp.models.Model.exists`
     Returns a new recordset containing only the records which exist in the
@@ -369,9 +415,9 @@ it uses the values of other *fields*, it should specify those fields using
     def _apply_discount(self):
         for record in self:
             # compute actual discount from discount percentage
-            discount = self.value * self.discount
-            self.discount_value = discount
-            self.total = self.value - discount
+            discount = record.value * record.discount
+            record.discount_value = discount
+            record.total = record.value - discount
 
 Related fields
 ''''''''''''''
@@ -444,8 +490,8 @@ Clearing caches can be performed using the
 
 .. _reference/orm/oldapi:
 
-Old API compatibility
-=====================
+Compatibility between new API and old API
+=========================================
 
 Odoo is currently transitioning from an older (less regular) API, it can be
 necessary to manually bridge from one to the other manually:
@@ -493,7 +539,7 @@ Two decorators can expose a new-style method to the old API:
     empty. Its "old API" signature is ``cr, uid, *arguments, context``::
 
         @api.model
-        def some_method(foo):
+        def some_method(self, a_value):
             pass
         # can be called as
         old_style_model.some_method(cr, uid, a_value, context=context)
@@ -503,7 +549,7 @@ Two decorators can expose a new-style method to the old API:
     "old API" signature is ``cr, uid, ids, *arguments, context``::
 
         @api.multi
-        def some_method(foo):
+        def some_method(self, a_value):
             pass
         # can be called as
         old_style_model.some_method(cr, uid, [id1, id2], a_value, context=context)
@@ -520,7 +566,7 @@ return lists of ids, there is also a decorator managing this:
 
         >>> @api.multi
         ... @api.returns('self')
-        ... def some_method():
+        ... def some_method(self):
         ...     return self
         >>> new_style_model = env['a.model'].browse(1, 2, 3)
         >>> new_style_model.some_method()
@@ -632,6 +678,7 @@ Model Reference
     .. automethod:: write
 
     .. automethod:: read
+    .. automethod:: read_group
 
     .. rubric:: Research
 
@@ -759,8 +806,8 @@ Method decorators
 =================
 
 .. automodule:: openerp.api
-    :members: one, multi, model, depends, constrains, onchange, returns,
-              v7, v8
+    :members: multi, model, depends, constrains, onchange, returns,
+              one, v7, v8
 
 .. _reference/orm/fields:
 
@@ -1026,9 +1073,10 @@ Domain criteria can be combined using logical operators in *prefix* form:
         AND (language is NOT english)
         AND (country is Belgium OR Germany)
 
-Porting from the old API
-========================
+Porting from the old API to the new API
+=======================================
 
+* bare lists of ids are to be avoided in the new API, use recordsets instead
 * methods still written in the old API should be automatically bridged by the
   ORM, no need to switch to the old API, just call them as if they were a new
   API method. See :ref:`reference/orm/oldapi/bridging` for more details.

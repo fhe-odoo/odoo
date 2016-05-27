@@ -1,23 +1,5 @@
 # -*- coding: utf-8 -*-
-##############################################################################
-#
-#    OpenERP, Open Source Management Solution
-#    Copyright (C) 2011 OpenERP SA (<http://www.openerp.com>).
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as
-#    published by the Free Software Foundation, either version 3 of the
-#    License, or (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU Affero General Public License for more details.
-#
-#    You should have received a copy of the GNU Affero General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-##############################################################################
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 """
 Store database-specific configuration parameters
 """
@@ -25,50 +7,48 @@ Store database-specific configuration parameters
 import uuid
 import datetime
 
-from openerp import SUPERUSER_ID
-from openerp.osv import osv, fields
-from openerp.tools import misc, config
+from odoo import api, fields, models
+from odoo.tools import misc, config, ormcache
 
 """
 A dictionary holding some configuration parameters to be initialized when the database is created.
 """
 _default_parameters = {
+    "database.secret": lambda: (str(uuid.uuid4()), ['base.group_erp_manager']),
     "database.uuid": lambda: (str(uuid.uuid1()), []),
-    "database.create_date": lambda: (datetime.datetime.now().strftime(misc.DEFAULT_SERVER_DATETIME_FORMAT), ['base.group_user']),
+    "database.create_date": lambda: (fields.Datetime.now(), ['base.group_user']),
     "web.base.url": lambda: ("http://localhost:%s" % config.get('xmlrpc_port'), []),
 }
 
 
-class ir_config_parameter(osv.osv):
+class IrConfigParameter(models.Model):
     """Per-database storage of configuration key-value pairs."""
-
     _name = 'ir.config_parameter'
     _rec_name = 'key'
 
-    _columns = {
-        'key': fields.char('Key', required=True, select=1),
-        'value': fields.text('Value', required=True),
-        'group_ids': fields.many2many('res.groups', 'ir_config_parameter_groups_rel', 'icp_id', 'group_id', string='Groups'),
-    }
+    key = fields.Char(required=True, index=True)
+    value = fields.Text(required=True)
+    group_ids = fields.Many2many('res.groups', 'ir_config_parameter_groups_rel', 'icp_id', 'group_id', string='Groups')
 
     _sql_constraints = [
         ('key_uniq', 'unique (key)', 'Key must be unique.')
     ]
 
-    def init(self, cr, force=False):
+    @api.model_cr
+    def init(self, force=False):
         """
         Initializes the parameters listed in _default_parameters.
         It overrides existing parameters if force is ``True``.
         """
         for key, func in _default_parameters.iteritems():
             # force=True skips search and always performs the 'if' body (because ids=False)
-            ids = not force and self.search(cr, SUPERUSER_ID, [('key','=',key)])
-            if not ids:
+            self = not force and self.sudo().search([('key', '=', key)])
+            if not self.ids:
                 value, groups = func()
-                self.set_param(cr, SUPERUSER_ID, key, value, groups=groups)
+                self.sudo().set_param(key, value, groups=groups)
 
-
-    def get_param(self, cr, uid, key, default=False, context=None):
+    @api.model
+    def get_param(self, key, default=False):
         """Retrieve the value for a given key.
 
         :param string key: The key of the parameter value to retrieve.
@@ -76,14 +56,16 @@ class ir_config_parameter(osv.osv):
         :return: The value of the parameter, or ``default`` if it does not exist.
         :rtype: string
         """
-        ids = self.search(cr, uid, [('key','=',key)], context=context)
-        if not ids:
-            return default
-        param = self.browse(cr, uid, ids[0], context=context)
-        value = param.value
-        return value
+        return self._get_param(key) or default
 
-    def set_param(self, cr, uid, key, value, groups=[], context=None):
+    @api.model
+    @ormcache('self._uid', 'key')
+    def _get_param(self, key):
+        params = self.search_read([('key', '=', key)], fields=['value'], limit=1)
+        return params[0]['value'] if params else None
+
+    @api.model
+    def set_param(self, key, value, groups=()):
         """Sets the value of a parameter.
 
         :param string key: The key of the parameter value to set.
@@ -93,25 +75,37 @@ class ir_config_parameter(osv.osv):
                  not exist.
         :rtype: string
         """
-        ids = self.search(cr, uid, [('key','=',key)], context=context)
+        self._get_param.clear_cache(self)
+        param = self.search([('key', '=', key)])
 
         gids = []
         for group_xml in groups:
-            res_id = self.pool['ir.model.data'].xmlid_to_res_id(cr, uid, group_xml)
-            if res_id:
-                gids.append((4, res_id))
+            group = self.env.ref(group_xml, raise_if_not_found=False)
+            if group:
+                gids.append((4, group.id))
 
         vals = {'value': value}
         if gids:
             vals.update(group_ids=gids)
-        if ids:
-            param = self.browse(cr, uid, ids[0], context=context)
+        if param:
             old = param.value
-            self.write(cr, uid, ids, vals, context=context)
+            if value is not False and value is not None:
+                param.write(vals)
+            else:
+                param.unlink()
             return old
         else:
             vals.update(key=key)
-            self.create(cr, uid, vals, context=context)
+            if value is not False and value is not None:
+                self.create(vals)
             return False
 
-# vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:
+    @api.multi
+    def write(self, vals):
+        self.clear_caches()
+        return super(IrConfigParameter, self).write(vals)
+
+    @api.multi
+    def unlink(self):
+        self.clear_caches()
+        return super(IrConfigParameter, self).unlink()

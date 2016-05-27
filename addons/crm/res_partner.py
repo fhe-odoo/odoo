@@ -1,23 +1,5 @@
 # -*- coding: utf-8 -*-
-##############################################################################
-#
-#    OpenERP, Open Source Management Solution
-#    Copyright (C) 2004-2010 Tiny SPRL (<http://tiny.be>).
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as
-#    published by the Free Software Foundation, either version 3 of the
-#    License, or (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU Affero General Public License for more details.
-#
-#    You should have received a copy of the GNU Affero General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-##############################################################################
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from openerp.osv import fields,osv
 
@@ -25,19 +7,29 @@ class res_partner(osv.osv):
     """ Inherits partner and adds CRM information in the partner form """
     _inherit = 'res.partner'
 
-    def _opportunity_meeting_phonecall_count(self, cr, uid, ids, field_name, arg, context=None):
+    def _opportunity_meeting_count(self, cr, uid, ids, field_name, arg, context=None):
         res = dict(map(lambda x: (x,{'opportunity_count': 0, 'meeting_count': 0}), ids))
         # the user may not have access rights for opportunities or meetings
         try:
             for partner in self.browse(cr, uid, ids, context):
+                if partner.is_company:
+                    operator = 'child_of'
+                else:
+                    operator = '='
+                opp_ids = self.pool['crm.lead'].search(cr, uid, [('partner_id', operator, partner.id), ('type', '=', 'opportunity')], context=context)
                 res[partner.id] = {
-                    'opportunity_count': len(partner.opportunity_ids),
+                    'opportunity_count': len(opp_ids),
                     'meeting_count': len(partner.meeting_ids),
                 }
         except:
             pass
-        for partner in self.browse(cr, uid, ids, context):
-            res[partner.id]['phonecall_count'] = len(partner.phonecall_ids)
+        return res
+
+    def _compute_activities_count(self, cr, uid, ids, field_name, arg, context=None):
+        res = dict.fromkeys(ids, None)
+        activities = self.pool['crm.activity.report'].read_group(cr, uid, [('partner_id', 'in', ids)], ['partner_id'], ['partner_id'], context=context)
+        for activity in activities:
+            res[activity['partner_id'][0]] = activity['partner_id_count']
         return res
 
     _columns = {
@@ -46,11 +38,9 @@ class res_partner(osv.osv):
             'Opportunities', domain=[('type', '=', 'opportunity')]),
         'meeting_ids': fields.many2many('calendar.event', 'calendar_event_res_partner_rel','res_partner_id', 'calendar_event_id',
             'Meetings'),
-        'phonecall_ids': fields.one2many('crm.phonecall', 'partner_id',\
-            'Phonecalls'),
-        'opportunity_count': fields.function(_opportunity_meeting_phonecall_count, string="Opportunity", type='integer', multi='opp_meet'),
-        'meeting_count': fields.function(_opportunity_meeting_phonecall_count, string="# Meetings", type='integer', multi='opp_meet'),
-        'phonecall_count': fields.function(_opportunity_meeting_phonecall_count, string="Phonecalls", type="integer", multi='opp_meet'),
+        'opportunity_count': fields.function(_opportunity_meeting_count, string="Opportunity", type='integer', multi='opp_meet'),
+        'meeting_count': fields.function(_opportunity_meeting_count, string="# Meetings", type='integer', multi='opp_meet'),
+        'activities_count': fields.function(_compute_activities_count, string="Activities", type="integer"),
     }
 
     def redirect_partner_form(self, cr, uid, partner_id, context=None):
@@ -91,7 +81,7 @@ class res_partner(osv.osv):
         partner_ids.append(self.pool.get('res.users').browse(cr, uid, uid).partner_id.id)
         res = self.pool.get('ir.actions.act_window').for_xml_id(cr, uid, 'calendar', 'action_calendar_event', context)
         res['context'] = {
-            'search_default_partner_ids': list(ids),
+            'search_default_partner_ids': context['partner_name'],
             'default_partner_ids': partner_ids,
         }
         return res

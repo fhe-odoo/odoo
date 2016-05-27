@@ -1,33 +1,17 @@
 # -*- coding: utf-8 -*-
-##############################################################################
-#
-#    OpenERP, Open Source Management Solution
-#    Copyright (C) 2014-Today OpenERP SA (<http://www.openerp.com>).
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as
-#    published by the Free Software Foundation, either version 3 of the
-#    License, or (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU Affero General Public License for more details.
-#
-#    You should have received a copy of the GNU Affero General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-##############################################################################
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from openerp import api
 from openerp import SUPERUSER_ID
 from openerp.exceptions import AccessError
-from openerp.osv import osv
+from openerp.osv import osv, fields
+from openerp.sql_db import TestCursor
 from openerp.tools import config
 from openerp.tools.misc import find_in_path
 from openerp.tools.translate import _
 from openerp.addons.web.http import request
 from openerp.tools.safe_eval import safe_eval as eval
+from openerp.exceptions import UserError
 
 import re
 import time
@@ -41,6 +25,7 @@ from contextlib import closing
 from distutils.version import LooseVersion
 from functools import partial
 from pyPdf import PdfFileWriter, PdfFileReader
+from reportlab.graphics.barcode import createBarcodeDrawing
 
 
 #--------------------------------------------------------------------------
@@ -49,10 +34,7 @@ from pyPdf import PdfFileWriter, PdfFileReader
 _logger = logging.getLogger(__name__)
 
 def _get_wkhtmltopdf_bin():
-    wkhtmltopdf_bin = find_in_path('wkhtmltopdf')
-    if wkhtmltopdf_bin is None:
-        raise IOError
-    return wkhtmltopdf_bin
+    return find_in_path('wkhtmltopdf')
 
 
 #--------------------------------------------------------------------------
@@ -68,7 +50,7 @@ except (OSError, IOError):
 else:
     _logger.info('Will use the Wkhtmltopdf binary at %s' % _get_wkhtmltopdf_bin())
     out, err = process.communicate()
-    version = re.search('([0-9.]+)', out).group(0)
+    version = re.search('([0-9.]+)', out or "0").group(0)
     if LooseVersion(version) < LooseVersion('0.12.0'):
         _logger.info('Upgrade Wkhtmltopdf to (at least) 0.12.0')
         wkhtmltopdf_state = 'upgrade'
@@ -89,6 +71,7 @@ class Report(osv.Model):
     #--------------------------------------------------------------------------
     # Extension of ir_ui_view.render with arguments frequently used in reports
     #--------------------------------------------------------------------------
+
     def render(self, cr, uid, ids, template, values=None, context=None):
         """Allow to render a QWeb template python-side. This function returns the 'ir.ui.view'
         render but embellish it with some variables/methods used in reports.
@@ -106,45 +89,22 @@ class Report(osv.Model):
 
         view_obj = self.pool['ir.ui.view']
 
-        def translate_doc(doc_id, model, lang_field, template):
-            """Helper used when a report should be translated into a specific lang.
-
-            <t t-foreach="doc_ids" t-as="doc_id">
-            <t t-raw="translate_doc(doc_id, doc_model, 'partner_id.lang', account.report_invoice_document')"/>
-            </t>
-
-            :param doc_id: id of the record to translate
-            :param model: model of the record to translate
-            :param lang_field': field of the record containing the lang
-            :param template: name of the template to translate into the lang_field
-            """
-            ctx = context.copy()
-            doc = self.pool[model].browse(cr, uid, doc_id, context=ctx)
-            qcontext = values.copy()
-            # Do not force-translate if we chose to display the report in a specific lang
-            if ctx.get('translatable') is True:
-                qcontext['o'] = doc
-            else:
-                # Reach the lang we want to translate the doc into
-                ctx['lang'] = eval('doc.%s' % lang_field, {'doc': doc})
-                qcontext['o'] = self.pool[model].browse(cr, uid, doc_id, context=ctx)
-            return view_obj.render(cr, uid, template, qcontext, context=ctx)
-
-        user = self.pool['res.users'].browse(cr, uid, uid)
+        user = self.pool['res.users'].browse(cr, uid, uid, context=context)
         website = None
         if request and hasattr(request, 'website'):
             if request.website is not None:
                 website = request.website
                 context = dict(context, translatable=context.get('lang') != request.website.default_lang_code)
+
         values.update(
             time=time,
-            translate_doc=translate_doc,
+            context_timestamp=lambda t: fields.datetime.context_timestamp(cr, uid, t, context),
             editable=True,
             user=user,
             res_company=user.company_id,
             website=website,
         )
-        return view_obj.render(cr, uid, template, values, context=context)
+        return view_obj.render_template(cr, uid, template, values, context=context)
 
     #--------------------------------------------------------------------------
     # Main report methods
@@ -155,11 +115,11 @@ class Report(osv.Model):
         """
         # If the report is using a custom model to render its html, we must use it.
         # Otherwise, fallback on the generic html rendering.
-        try:
-            report_model_name = 'report.%s' % report_name
-            particularreport_obj = self.pool[report_model_name]
+        report_model_name = 'report.%s' % report_name
+        particularreport_obj = self.pool.get(report_model_name)
+        if particularreport_obj is not None:
             return particularreport_obj.render_html(cr, uid, ids, data=data, context=context)
-        except KeyError:
+        else:
             report = self._get_report_from_name(cr, uid, report_name)
             report_obj = self.pool[report.model]
             docs = report_obj.browse(cr, uid, ids, context=context)
@@ -172,8 +132,8 @@ class Report(osv.Model):
 
     @api.v8
     def get_html(self, records, report_name, data=None):
-        return self._model.get_html(self._cr, self._uid, records.ids, report_name,
-                                    data=data, context=self._context)
+        return Report.get_html(self._model, self._cr, self._uid, records.ids,
+                               report_name, data=data, context=self._context)
 
     @api.v7
     def get_pdf(self, cr, uid, ids, report_name, html=None, data=None, context=None):
@@ -182,8 +142,26 @@ class Report(osv.Model):
         if context is None:
             context = {}
 
+        # As the assets are generated during the same transaction as the rendering of the
+        # templates calling them, there is a scenario where the assets are unreachable: when
+        # you make a request to read the assets while the transaction creating them is not done.
+        # Indeed, when you make an asset request, the controller has to read the `ir.attachment`
+        # table.
+        # This scenario happens when you want to print a PDF report for the first time, as the
+        # assets are not in cache and must be generated. To workaround this issue, we manually
+        # commit the writes in the `ir.attachment` table. It is done thanks to a key in the context.
+        if not config['test_enable']:
+            context = dict(context, commit_assetsbundle=True)
+
         if html is None:
             html = self.get_html(cr, uid, ids, report_name, data=data, context=context)
+
+        # The test cursor prevents the use of another environnment while the current
+        # transaction is not finished, leading to a deadlock when the report requests
+        # an asset bundle during the execution of test scenarios. In this case, return
+        # the html version.
+        if isinstance(cr, TestCursor):
+            return html
 
         html = html.decode('utf-8')  # Ensure the current document is utf-8 encoded.
 
@@ -199,7 +177,6 @@ class Report(osv.Model):
             paperformat = report.paperformat_id
 
         # Preparing the minimal html pages
-        css = ''  # Will contain local css
         headerhtml = []
         contenthtml = []
         footerhtml = []
@@ -208,7 +185,7 @@ class Report(osv.Model):
 
         # Minimal page renderer
         view_obj = self.pool['ir.ui.view']
-        render_minimal = partial(view_obj.render, cr, uid, 'report.minimal_layout', context=context)
+        render_minimal = partial(view_obj.render_template, cr, uid, 'report.minimal_layout', context=context)
 
         # The received html report must be simplified. We convert it in a xml tree
         # in order to extract headers, bodies and footers.
@@ -216,17 +193,14 @@ class Report(osv.Model):
             root = lxml.html.fromstring(html)
             match_klass = "//div[contains(concat(' ', normalize-space(@class), ' '), ' {} ')]"
 
-            for node in root.xpath("//html/head/style"):
-                css += node.text
-
             for node in root.xpath(match_klass.format('header')):
                 body = lxml.html.tostring(node)
-                header = render_minimal(dict(css=css, subst=True, body=body, base_url=base_url))
+                header = render_minimal(dict(subst=True, body=body, base_url=base_url))
                 headerhtml.append(header)
 
             for node in root.xpath(match_klass.format('footer')):
                 body = lxml.html.tostring(node)
-                footer = render_minimal(dict(css=css, subst=True, body=body, base_url=base_url))
+                footer = render_minimal(dict(subst=True, body=body, base_url=base_url))
                 footerhtml.append(footer)
 
             for node in root.xpath(match_klass.format('page')):
@@ -247,7 +221,7 @@ class Report(osv.Model):
 
                 # Extract the body
                 body = lxml.html.tostring(node)
-                reportcontent = render_minimal(dict(css=css, subst=False, body=body, base_url=base_url))
+                reportcontent = render_minimal(dict(subst=False, body=body, base_url=base_url))
 
                 contenthtml.append(tuple([reportid, reportcontent]))
 
@@ -266,13 +240,14 @@ class Report(osv.Model):
         # Run wkhtmltopdf process
         return self._run_wkhtmltopdf(
             cr, uid, headerhtml, footerhtml, contenthtml, context.get('landscape'),
-            paperformat, specific_paperformat_args, save_in_attachment
+            paperformat, specific_paperformat_args, save_in_attachment,
+            context.get('set_viewport_size')
         )
 
     @api.v8
     def get_pdf(self, records, report_name, html=None, data=None):
-        return self._model.get_pdf(self._cr, self._uid, records.ids, report_name,
-                                   html=html, data=data, context=self._context)
+        return Report.get_pdf(self._model, self._cr, self._uid, records.ids,
+                              report_name, html=html, data=data, context=self._context)
 
     @api.v7
     def get_action(self, cr, uid, ids, report_name, data=None, context=None):
@@ -291,10 +266,7 @@ class Report(osv.Model):
         try:
             report = report_obj.browse(cr, uid, idreport[0], context=context)
         except IndexError:
-            raise osv.except_osv(
-                _('Bad Report Reference'),
-                _('This report is not loaded into the database: %s.' % report_name)
-            )
+            raise UserError(_("Bad Report Reference") + _("This report is not loaded into the database: %s.") % report_name)
 
         return {
             'context': context,
@@ -308,8 +280,8 @@ class Report(osv.Model):
 
     @api.v8
     def get_action(self, records, report_name, data=None):
-        return self._model.get_action(self._cr, self._uid, records.ids, report_name,
-                                      data=data, context=self._context)
+        return Report.get_action(self._model, self._cr, self._uid, records.ids,
+                                 report_name, data=data, context=self._context)
 
     #--------------------------------------------------------------------------
     # Report generation helpers
@@ -355,13 +327,13 @@ class Report(osv.Model):
 
     @api.v8
     def _check_attachment_use(self, records, report):
-        return self._model._check_attachment_use(
-            self._cr, self._uid, records.ids, report, context=self._context)
+        return Report._check_attachment_use(
+            self._model, self._cr, self._uid, records.ids, report, context=self._context)
 
     def _check_wkhtmltopdf(self):
         return wkhtmltopdf_state
 
-    def _run_wkhtmltopdf(self, cr, uid, headers, footers, bodies, landscape, paperformat, spec_paperformat_args=None, save_in_attachment=None):
+    def _run_wkhtmltopdf(self, cr, uid, headers, footers, bodies, landscape, paperformat, spec_paperformat_args=None, save_in_attachment=None, set_viewport_size=False):
         """Execute wkhtmltopdf as a subprocess in order to convert html given in input into a pdf
         document.
 
@@ -374,7 +346,12 @@ class Report(osv.Model):
         :param save_in_attachment: dict of reports to save/load in/from the db
         :returns: Content of the pdf as a string
         """
+        if not save_in_attachment:
+            save_in_attachment = {}
+
         command_args = []
+        if set_viewport_size:
+            command_args.extend(['--viewport-size', landscape and '1024x1280' or '1280x1024'])
 
         # Passing the cookie to wkhtmltopdf in order to resolve internal links.
         try:
@@ -397,7 +374,7 @@ class Report(osv.Model):
                     del command_args[index]
                     del command_args[index]
                     command_args.extend(['--orientation', 'landscape'])
-        elif landscape and not '--orientation' in command_args:
+        elif landscape and '--orientation' not in command_args:
             command_args.extend(['--orientation', 'landscape'])
 
         # Execute WKhtmltopdf
@@ -441,14 +418,12 @@ class Report(osv.Model):
             try:
                 wkhtmltopdf = [_get_wkhtmltopdf_bin()] + command_args + local_command_args
                 wkhtmltopdf += [content_file_path] + [pdfreport_path]
-
                 process = subprocess.Popen(wkhtmltopdf, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 out, err = process.communicate()
 
                 if process.returncode not in [0, 1]:
-                    raise osv.except_osv(_('Report (PDF)'),
-                                         _('Wkhtmltopdf failed (error code: %s). '
-                                           'Message: %s') % (str(process.returncode), err))
+                    raise UserError(_('Wkhtmltopdf failed (error code: %s). '
+                                      'Message: %s') % (str(process.returncode), err))
 
                 # Save the pdf in attachment if marked
                 if reporthtml[0] is not False and save_in_attachment.get(reporthtml[0]):
@@ -463,8 +438,7 @@ class Report(osv.Model):
                         try:
                             self.pool['ir.attachment'].create(cr, uid, attachment)
                         except AccessError:
-                            _logger.warning("Cannot save PDF report %r as attachment",
-                                            attachment['name'])
+                            _logger.info("Cannot save PDF report %r as attachment", attachment['name'])
                         else:
                             _logger.info('The PDF document %s is now saved in the database',
                                          attachment['name'])
@@ -499,8 +473,9 @@ class Report(osv.Model):
         report_obj = self.pool['ir.actions.report.xml']
         qwebtypes = ['qweb-pdf', 'qweb-html']
         conditions = [('report_type', 'in', qwebtypes), ('report_name', '=', report_name)]
-        idreport = report_obj.search(cr, uid, conditions)[0]
-        return report_obj.browse(cr, uid, idreport)
+        context = self.pool['res.users'].context_get(cr, uid)
+        idreport = report_obj.search(cr, uid, conditions, context=context)[0]
+        return report_obj.browse(cr, uid, idreport, context=context)
 
     def _build_wkhtmltopdf_args(self, paperformat, specific_paperformat_args=None):
         """Build arguments understandable by wkhtmltopdf from a report.paperformat record.
@@ -519,7 +494,7 @@ class Report(osv.Model):
 
         if specific_paperformat_args and specific_paperformat_args.get('data-report-margin-top'):
             command_args.extend(['--margin-top', str(specific_paperformat_args['data-report-margin-top'])])
-        elif paperformat.margin_top:
+        else:
             command_args.extend(['--margin-top', str(paperformat.margin_top)])
 
         if specific_paperformat_args and specific_paperformat_args.get('data-report-dpi'):
@@ -536,12 +511,9 @@ class Report(osv.Model):
         elif paperformat.header_spacing:
             command_args.extend(['--header-spacing', str(paperformat.header_spacing)])
 
-        if paperformat.margin_left:
-            command_args.extend(['--margin-left', str(paperformat.margin_left)])
-        if paperformat.margin_bottom:
-            command_args.extend(['--margin-bottom', str(paperformat.margin_bottom)])
-        if paperformat.margin_right:
-            command_args.extend(['--margin-right', str(paperformat.margin_right)])
+        command_args.extend(['--margin-left', str(paperformat.margin_left)])
+        command_args.extend(['--margin-bottom', str(paperformat.margin_bottom)])
+        command_args.extend(['--margin-right', str(paperformat.margin_right)])
         if paperformat.orientation:
             command_args.extend(['--orientation', str(paperformat.orientation)])
         if paperformat.header_line:
@@ -572,3 +544,18 @@ class Report(osv.Model):
             stream.close()
 
         return merged_file_path
+
+    def barcode(self, barcode_type, value, width=600, height=100, humanreadable=0):
+        if barcode_type == 'UPCA' and len(value) in (11, 12, 13):
+            barcode_type = 'EAN13'
+            if len(value) in (11, 12):
+                value = '0%s' % value
+        try:
+            width, height, humanreadable = int(width), int(height), bool(int(humanreadable))
+            barcode = createBarcodeDrawing(
+                barcode_type, value=value, format='png', width=width, height=height,
+                humanReadable=humanreadable
+            )
+            return barcode.asString('png')
+        except (ValueError, AttributeError):
+            raise ValueError("Cannot convert into barcode.")

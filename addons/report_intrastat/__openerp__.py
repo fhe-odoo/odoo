@@ -1,27 +1,8 @@
 # -*- coding: utf-8 -*-
-##############################################################################
-#
-#    OpenERP, Open Source Management Solution
-#    Copyright (C) 2004-2010 Tiny SPRL (<http://tiny.be>).
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as
-#    published by the Free Software Foundation, either version 3 of the
-#    License, or (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU Affero General Public License for more details.
-#
-#    You should have received a copy of the GNU Affero General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-##############################################################################
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 {
     'name': 'Intrastat Reporting',
-    'version': '1.0',
     'category': 'Accounting & Finance',
     'description': """
 A module that adds intrastat reports.
@@ -29,21 +10,14 @@ A module that adds intrastat reports.
 
 This module gives the details of the goods traded between the countries of
 European Union.""",
-    'author': 'OpenERP SA',
-    'website': 'http://www.openerp.com',
-    'depends': ['base', 'product', 'stock', 'sale', 'purchase'],
+    'depends': ['base', 'product', 'delivery', 'stock', 'sale', 'purchase'],
     'data': [
+        'data/report_intrastat_data.xml',
+        'report/report_intrastat_invoice_template.xml',
+        'report/report_intrastat_report.xml',
         'security/ir.model.access.csv',
-        'report_intrastat_view.xml',
-        'intrastat_report.xml',
-        'report_intrastat_data.xml',
-        'views/report_intrastatinvoice.xml'
+        'security/report_intrastat_security.xml',
+        'views/report_intrastat_views.xml',
     ],
-    'demo': [],
-    'test': ['test/report_intrastat_report.yml'],
-    'installable': True,
-    'auto_install': False,
-    'images': ['images/country_intrastat_code.jpeg','images/intrastat_code.jpeg'],
+    'tests': ['../account/test/account_minimal_test.xml'],
 }
-
-# vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:

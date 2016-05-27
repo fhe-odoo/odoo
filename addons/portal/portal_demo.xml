@@ -12,13 +12,14 @@
             <field name="city">Vivegnis</field>
             <field name="zip">4683</field>
             <field name="country_id" ref="base.be"/>
-            <field name="street">Rue Cesar de Paepe, 43</field>
+            <field name="street">YourCompany</field>
+            <field name="street2">Rue Cesar de Paepe, 43</field>
         </record>
         <record id="demo_user0" model="res.users" context="{'no_reset_password': True}">
             <field name="partner_id" ref="partner_demo_portal"/>
             <field name="login">portal</field>
             <field name="password">portal</field>
-            <field name="signature"><![CDATA[<span>--<br/>
+            <field name="signature"><![CDATA[<span>-- <br/>
 Mr Demo Portal</span>]]></field>
             <!-- Avoid auto-including this user in any default group -->
             <field name="groups_id" eval="[(5,)]"/>

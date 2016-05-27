@@ -1,8 +1,14 @@
+:banner: banners/build_a_module.jpg
+
 .. queue:: backend/series
 
 =================
 Building a Module
 =================
+
+.. warning::
+
+    This tutorial requires :ref:`having installed Odoo <setup/install>`
 
 Start/Stop the Odoo server
 ==========================
@@ -70,31 +76,9 @@ option.
     most command-line options can also be set using :ref:`a configuration
     file <reference/cmdline/config>`
 
-An Odoo module is declared by its :ref:`manifest <reference/module/manifest>`. It
-is mandatory and contains a single python dictionary declaring various
-metadata for the module: the module's name and description, list of Odoo
-modules required for this one to work properly, references to data files, …
-
-The manifest's general structure is::
-
-    {
-        'name': "MyModule",
-        'version': '1.0',
-        'depends': ['base'],
-        'author': "Author Name",
-        'category': 'Category',
-        'description': """
-        Description text
-        """,
-        # data files always loaded at installation
-        'data': [
-            'mymodule_view.xml',
-        ],
-        # data files containing optionally loaded demonstration data
-        'demo': [
-            'demo_data.xml',
-        ],
-    }
+An Odoo module is declared by its :ref:`manifest <reference/module/manifest>`.
+See the :ref:`manifest documentation <reference/module/manifest>` information
+about it.
 
 A module is also a
 `Python package <http://docs.python.org/2/tutorial/modules.html#packages>`_
@@ -104,15 +88,15 @@ files in the module.
 For instance, if the module has a single ``mymodule.py`` file ``__init__.py``
 might contain::
 
-    import mymodule
+    from . import mymodule
 
-Fortunately, there is a mechanism to help you set up an module. The command
-``odoo.py`` has a subcommand :ref:`scaffold <reference/cmdline/scaffold>` to
-create an empty module:
+Odoo provides a mechanism to help set up a new module, :ref:`odoo.py
+<reference/cmdline/server>` has a subcommand :ref:`scaffold
+<reference/cmdline/scaffold>` to create an empty module:
 
-.. code:: bash
+.. code-block:: console
 
-    odoo.py scaffold <module name> <where to put it>
+    $ odoo.py scaffold <module name> <where to put it>
 
 The command creates a subdirectory for your module, and automatically creates a
 bunch of standard files for a module. Most of them simply contain commented code
@@ -252,7 +236,7 @@ record.
                 <field name="{a field name}">{a value}</field>
             </record>
         </data>
-    <openerp>
+    </openerp>
 
 * ``model`` is the name of the Odoo model for the record
 * ``id`` is an :term:`external identifier`, it allows referring to the record
@@ -309,7 +293,7 @@ action more easily.
 
 .. exercise:: Define new menu entries
 
-    Define new menu entries to access courses and sessions under the
+    Define new menu entries to access courses under the
     OpenAcademy menu entry. A user should be able to
 
     - display a list of all the courses
@@ -639,12 +623,12 @@ instead of a single view its ``arch`` field is composed of any number of
     <!-- improved idea categories list -->
     <record id="idea_category_list2" model="ir.ui.view">
         <field name="name">id.category.list2</field>
-        <field name="model">ir.ui.view</field>
+        <field name="model">idea.category</field>
         <field name="inherit_id" ref="id_category_list"/>
         <field name="arch" type="xml">
-            <!-- find field description inside tree, and add the field
+            <!-- find field description and add the field
                  idea_ids after it -->
-            <xpath expr="/tree/field[@name='description']" position="after">
+            <xpath expr="//field[@name='description']" position="after">
               <field name="idea_ids" string="Number of ideas"/>
             </xpath>
         </field>
@@ -659,7 +643,8 @@ instead of a single view its ``arch`` field is composed of any number of
     ``inside``
         appends ``xpath``'s body at the end of the matched element
     ``replace``
-        replaces the matched element by the ``xpath``'s body
+        replaces the matched element with the ``xpath``'s body, replacing any `$0` node occurrence
+        in the new body with the original element
     ``before``
         inserts the ``xpath``'s body as a sibling before the matched element
     ``after``
@@ -667,6 +652,22 @@ instead of a single view its ``arch`` field is composed of any number of
     ``attributes``
         alters the attributes of the matched element using special
         ``attribute`` elements in the ``xpath``'s body
+
+.. tip::
+
+    When matching a single element, the ``position`` attribute can be set directly
+    on the element to be found. Both inheritances below will give the same result.
+
+    .. code-block:: xml
+
+        <xpath expr="//field[@name='description']" position="after">
+            <field name="idea_ids" />
+        </xpath>
+
+        <field name="description" position="after">
+            <field name="idea_ids" />
+        </field>
+
 
 .. exercise:: Alter existing content
 
@@ -775,24 +776,18 @@ method should simply set the value of the field to compute on every record in
 .. code-block:: python
 
     import random
-    from openerp import models, fields
+    from openerp import models, fields, api
 
     class ComputedModel(models.Model):
         _name = 'test.computed'
 
         name = fields.Char(compute='_compute_name')
 
+        @api.multi
         def _compute_name(self):
             for record in self:
                 record.name = str(random.randint(1, 1e6))
 
-Our compute method is very simple: it loops over ``self`` and performs the same
-operation on every record. We can make it slightly simpler by using the
-decorator :func:`~openerp.api.one` to automatically loop on the collection::
-
-        @api.one
-        def _compute_name(self):
-            self.name = str(random.randint(1, 1e6))
 
 Dependencies
 ------------
@@ -811,10 +806,10 @@ field whenever some of its dependencies have been modified::
         name = fields.Char(compute='_compute_name')
         value = fields.Integer()
 
-        @api.one
         @api.depends('value')
         def _compute_name(self):
-            self.name = "Record with value %s" % self.value
+            for record in self:
+                record.name = "Record with value %s" % record.value
 
 .. exercise:: Computed fields
 
@@ -988,19 +983,28 @@ Tree views
 Tree views can take supplementary attributes to further customize their
 behavior:
 
-``colors``
-    mappings of colors to conditions. If the condition evaluates to ``True``,
-    the corresponding color is applied to the row:
+``decoration-{$name}``
+    allow changing the style of a row's text based on the corresponding
+    record's attributes.
+
+    Values are Python expressions. For each record, the expression is evaluated
+    with the record's attributes as context values and if ``true``, the
+    corresponding style is applied to the row. Other context values are
+    ``uid`` (the id of the current user) and ``current_date`` (the current date
+    as a string of the form ``yyyy-MM-dd``).
+
+    ``{$name}`` can be ``bf`` (``font-weight: bold``), ``it``
+    (``font-style: italic``), or any `bootstrap contextual color
+    <http://getbootstrap.com/components/#available-variations>`_ (``danger``,
+    ``info``, ``muted``, ``primary``, ``success`` or ``warning``).
 
     .. code-block:: xml
 
-        <tree string="Idea Categories" colors="blue:state=='draft';red:state=='trashed'">
+        <tree string="Idea Categories" decoration-info="state=='draft'"
+            decoration-danger="state=='trashed'">
             <field name="name"/>
             <field name="state"/>
         </tree>
-
-    Clauses are separated by ``;``, the color and condition are separated by
-    ``:``.
 
 ``editable``
     Either ``"top"`` or ``"bottom"``. Makes the tree view editable in-place
@@ -1091,7 +1095,7 @@ predefined searches. Filters must have one of the following attributes:
                 domain="[('inventor_id', '=', uid)]"/>
         <group string="Group By">
             <filter name="group_by_inventor" string="Inventor"
-                    context="{'group_by': 'inventor'}"/>
+                    context="{'group_by': 'inventor_id'}"/>
         </group>
     </search>
 
@@ -1122,11 +1126,11 @@ their root element is ``<gantt>``.
 
 .. code-block:: xml
 
-    <gantt string="Ideas" date_start="invent_date" color="inventor_id">
-        <level object="idea.idea" link="id" domain="[]">
-            <field name="inventor_id"/>
-        </level>
-    </gantt>
+    <gantt string="Ideas"
+           date_start="invent_date"
+           date_stop="date_finished"
+           progress="progress"
+           default_group_by="inventor_id" />
 
 .. exercise:: Gantt charts
 
@@ -1147,13 +1151,15 @@ Graph views
 Graph views allow aggregated overview and analysis of models, their root
 element is ``<graph>``.
 
+.. note::
+    Pivot views (element ``<pivot>``) a multidimensional table, allows the
+    selection of filers and dimensions to get the right aggregated dataset
+    before moving to a more graphical overview. The pivot view shares the same
+    content definition as graph views.
+
 Graph views have 4 display modes, the default mode is selected using the
 ``@type`` attribute.
 
-Pivot
-    a multidimensional table, allows the selection of filers and dimensions
-    to get the right aggregated dataset before moving to a more graphical
-    overview
 Bar (default)
     a bar chart, the first dimension is used to define groups on the
     horizontal axis, other dimensions define aggregated bars within each group.
@@ -1462,8 +1468,8 @@ hooks in the ORM, such an action is declared in XML with the tag ``act_window``.
 
     <act_window id="launch_the_wizard"
                 name="Launch the Wizard"
-                src_model="context_model_name"
-                res_model="wizard_model_name"
+                src_model="context.model.name"
+                res_model="wizard.model.name"
                 view_mode="form"
                 target="new"
                 key2="client_action_multi"/>
@@ -1514,9 +1520,9 @@ Translation` without specifying a language), to create the module template POT
 file, and then derive the translated PO files. Many IDE's have plugins or modes
 for editing and merging PO/POT files.
 
-.. tip:: The GNU gettext format (Portable Object) used by Odoo is
-         integrated into LaunchPad, making it an online collaborative
-         translation platform.
+.. tip:: The Portable Object files generated by Odoo are published on
+         `Transifex <https://www.transifex.com/odoo/public/>`__, making it
+         easy to translate the software.
 
 .. code-block:: text
 
@@ -1627,6 +1633,30 @@ version of the *Invoice* report is available through
 http://localhost:8069/report/html/account.report_invoice/1 (if ``account`` is
 installed) and the PDF version through
 http://localhost:8069/report/pdf/account.report_invoice/1.
+
+.. _reference/backend/reporting/printed-reports/pdf-without-styles:
+
+.. danger::
+
+    If it appears that your PDF report is missing the styles (i.e. the text
+    appears but the style/layout is different from the html version), probably
+    your wkhtmltopdf_ process cannot reach your web server to download them.
+
+    If you check your server logs and see that the CSS styles are not being
+    downloaded when generating a PDF report, most surely this is the problem.
+
+    The wkhtmltopdf_ process will use the ``web.base.url`` system parameter as
+    the *root path* to all linked files, but this parameter is automatically
+    updated each time the Administrator is logged in. If your server resides
+    behind some kind of proxy, that could not be reachable. You can fix this by
+    adding one of these system parameters:
+
+    - ``report.url``, pointing to an URL reachable from your server
+      (probably ``http://localhost:8069`` or something similar). It will be
+      used for this particular purpose only.
+
+    - ``web.base.url.freeze``, when set to ``True``, will stop the
+      automatic updates to ``web.base.url``.
 
 .. exercise:: Create a report for the Session model
 
@@ -1789,7 +1819,7 @@ with the standard Python libraries ``urllib2`` and ``json``::
     note_id = call(url, "object", "execute", DB, uid, PASS, 'note.note', 'create', args)
 
 Here is the same program, using the library
-`jsonrpclib <https://pypi.python.org/pypi/jsonrpclib>`::
+`jsonrpclib <https://pypi.python.org/pypi/jsonrpclib>`_::
 
     import jsonrpclib
 
@@ -1824,6 +1854,7 @@ Examples can be easily adapted from XML-RPC to JSON-RPC.
     * https://github.com/syleam/openobject-library
     * https://github.com/nicolas-van/openerp-client-lib
     * https://pypi.python.org/pypi/oersted/
+    * https://github.com/abhishek-jaiswal/php-openerp-lib
 
 .. [#autofields] it is possible to :attr:`disable the automatic creation of some
                  fields <openerp.models.Model._log_access>`

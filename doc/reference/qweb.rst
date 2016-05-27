@@ -1,3 +1,5 @@
+:banner: banners/qweb.jpg
+
 .. highlight:: xml
 
 .. _reference/qweb:
@@ -158,6 +160,26 @@ variables for various data points:
     a boolean flag indicating that the current iteration round is on an odd
     index
 
+
+These extra variables provided and all new variables created into the
+``foreach`` are only available in the scope of the``foreach``. If the
+variable exists outside the context of the ``foreach``, the value is copied
+at the end of the foreach into the global context.
+
+::
+
+    <t t-set="existing_variable" t-value="False"/>
+    <!-- existing_variable now False -->
+
+    <p t-foreach="[1, 2, 3]" t-as="i">
+        <t t-set="existing_variable" t-value="True"/>
+        <t t-set="new_variable" t-value="True"/>
+        <!-- existing_variable and new_variable now True -->
+    </p>
+
+    <!-- existing_variable always True -->
+    <!-- new_variable undefined -->
+
 .. _reference/qweb/attributes:
 
 attributes
@@ -315,6 +337,17 @@ website's rich text edition.
 ``t-field-options`` can be used to customize fields, the most common option
 is ``widget``, other options are field- or widget-dependent.
 
+debugging
+---------
+
+``t-debug``
+    invokes a debugger using PDB's ``set_trace`` API. The parameter should
+    be the name of a module, on which a ``set_trace`` method is called::
+    
+        <t t-debug="pdb"/>
+    
+    is equivalent to ``importlib.import_module("pdb").set_trace()``
+
 Helpers
 -------
 
@@ -418,7 +451,7 @@ the name of the template to alter as parameter.
 The alteration is then performed with any number of ``t-jquery``
 sub-directives::
 
-    <t t-extends="base.template">
+    <t t-extend="base.template">
         <t t-jquery="ul" t-operation="append">
             <li>new element</li>
         </t>
@@ -457,24 +490,41 @@ The javascript QWeb implementation provides a few debugging hooks:
 
 ``t-log``
     takes an expression parameter, evaluates the expression during rendering
-    and logs its result with ``console.log``
+    and logs its result with ``console.log``::
+    
+        <t t-set="foo" t-value="42"/>
+        <t t-log="foo"/>
+        
+    will print ``42`` to the console
 ``t-debug``
-    triggers a debugger breakpoint during template rendering
+    triggers a debugger breakpoint during template rendering::
+    
+        <t t-if="a_test">
+            <t t-debug="">
+        </t>
+
+    will stop execution if debugging is active (exact condition depend on the
+    browser and its development tools)
 ``t-js``
     the node's body is javascript code executed during template rendering.
     Takes a ``context`` parameter, which is the name under which the rendering
-    context will be available in the ``t-js``'s body
+    context will be available in the ``t-js``'s body::
+    
+        <t t-set="foo" t-value="42"/>
+        <t t-js="ctx">
+            console.log("Foo is", ctx.foo);
+        </t>
 
 Helpers
 -------
 
-.. js:attribute:: openerp.qweb
+.. js:attribute:: core.qweb
 
-    An instance of :js:class:`QWeb2.Engine` with all module-defined template
+    (core is the ``web.core`` module) An instance of :js:class:`QWeb2.Engine` with all module-defined template
     files loaded, and references to standard helper objects ``_``
     (underscore), ``_t`` (translation function) and JSON_.
 
-    :js:func:`openerp.qweb.render <QWeb2.Engine.render>` can be used to
+    :js:func:`core.qweb.render <QWeb2.Engine.render>` can be used to
     easily render basic module templates
 
 API
@@ -485,9 +535,9 @@ API
     The QWeb "renderer", handles most of QWeb's logic (loading,
     parsing, compiling and rendering templates).
 
-    OpenERP Web instantiates one for the user, and sets it to
-    ``instance.web.qweb``. It also loads all the template files of the
-    various modules into that QWeb instance.
+    OpenERP Web instantiates one for the user in the core module, and 
+    exports it to ``core.qweb``. It also loads all the template files 
+    of the various modules into that QWeb instance.
 
     A :js:class:`QWeb2.Engine` also serves as a "template namespace".
 
@@ -560,7 +610,7 @@ API
 
 .. [#othertemplates] although it uses a few others, either for historical
                      reasons or because they remain better fits for the
-                     use case. Odoo 8.0 still depends on Jinja_ and Mako_.
+                     use case. Odoo 9.0 still depends on Jinja_ and Mako_.
 
 .. _templating:
     http://en.wikipedia.org/wiki/Template_processor

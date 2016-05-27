@@ -3,7 +3,7 @@
     <data>
         <record id="product_template_quote_1" model="product.template">
             <field name="name">Functional Training</field>
-            <field name="categ_id" ref="product.product_category_5"/>
+            <field name="categ_id" ref="product.product_category_3"/>
             <field name="standard_price">50000.0</field>
             <field name="list_price">750000.0</field>
             <field name="type">service</field>
@@ -19,7 +19,7 @@
 
         <record id="product_template_quote_2" model="product.template">
             <field name="name">Technical Training</field>
-            <field name="categ_id" ref="product.product_category_5"/>
+            <field name="categ_id" ref="product.product_category_3"/>
             <field name="standard_price">50000.0</field>
             <field name="list_price">0.0</field>
             <field name="type">service</field>
@@ -35,7 +35,7 @@
 
         <record id="product_template_quote_3" model="product.template">
             <field name="name">Advanced CRM Functional</field>
-            <field name="categ_id" ref="product.product_category_5"/>
+            <field name="categ_id" ref="product.product_category_3"/>
             <field name="standard_price">50000.0</field>
             <field name="list_price">750000.0</field>
             <field name="type">service</field>
@@ -90,7 +90,8 @@
                                        Deliver <strong>strong value added services</strong> as you can
                                        rely on a leading open source software, with
                                        the support of the publisher.
-                                   <p></p>
+                                   <p>
+                                   </p>
                                        <strong>Grow with your existing customer base</strong>
                                        by continuously proposing new modules.
                                    </p>
@@ -255,12 +256,12 @@
             <field name="discount">10.00</field>
             <field name="website_description" type="html">
                 <section>
-                    <h1>Online Training + Certification</h1>
+                    <h1>Online Training</h1>
                 </section>
                 <section>
                     <div class="row">
                         <div class="col-md-12 mb32">
-                            <p>These courses feature the same high quality course content found in our traditional classroom trainings, supplemented with modular sessions and cloud-based labs. Many of our online learning courses also include dozens of recorded webinars and live sessions by our senior instructors. At the end of the training, you can pass the Odoo Certification exam in one of the 5000+ Pearson VUE test centers worldwide.</p>
+                            <p>These courses feature the same high quality course content found in our traditional classroom trainings, supplemented with modular sessions and cloud-based labs. Many of our online learning courses also include dozens of recorded webinars and live sessions by our senior instructors.</p>
                         </div>
                         <div class="col-md-offset-1">
                             <h3>Your advantages</h3>
@@ -275,7 +276,7 @@
                             <h2>Structure of the Training</h2>
                         </div>
                         <div class="col-md-5 col-md-offset-1 mt16 mb16">
-                            <img class="img img-responsive" src="https://www.odoo.com/saas_master/static/site_new/img/layout/online_training.png"/>
+                            <img class="img img-responsive" src="/website_quote/static/src/img/online_training.png"/>
                         </div>
                         <div class="col-md-6 mt32">
                             <h4><strong>There are three components to the training</strong></h4>
@@ -348,7 +349,7 @@
                                         <li class="list-group-item">Advanced JQuery</li>
                                         <li class="list-group-item">Underscore</li>
                                         <li class="list-group-item">Introduction to QWeb</li>
-                                        <li class="list-group-item">Controlers and Views</li>
+                                        <li class="list-group-item">Controllers and Views</li>
                                         <li class="list-group-item">Bootstrap CSS</li>
                                         <li class="list-group-item">Calling the ORM</li>
                                     </ul>
@@ -395,20 +396,20 @@
                                 <ul><li>Understand the development concepts and architecture;</li>
                                     <li>Install and administer your own server;</li>
                                     <li>Develop a new module for a particular application.</li>
-                                </ul><p></p>
+                                </ul><p>&amp;nbsp;</p>
 
                                 <p><strong>Our prices include:</strong></p>
 
                                 <ul><li>drinks and lunch;</li>
                                     <li>training material.</li>
-                                </ul><p></p>
+                                </ul><p>&amp;nbsp;</p>
 
                                 <p><strong>Requirements:</strong></p>
 
                                 <ul><li>Bring your own laptop.</li>
                                     <li>Participants are expected to have some knowledge in programming. A basic knowledge of the Python programming is recommended.</li>
                                     <li>Participants preferably have a functional knowledge of our software (see Functional Training).</li>
-                                </ul><p></p>
+                                </ul><p>&amp;nbsp;</p>
 
                                 <p>To get more information, visit the <a href="https://www.odoo.com/">Odoo Official Website</a>.</p>
                             </div>
@@ -442,10 +443,10 @@
                                     <li class="list-group-item"> Install and administer Odoo.</li>
                                     <li class="list-group-item"> Become an Odoo Consultant.</li>
                                     <li class="list-group-item"> Do the GAP analysis of any Business Process.</li>
-                                    <li class="list-group-item"> Understand the functional concepts, business processes byOdoo.</li>
+                                    <li class="list-group-item"> Understand the functional concepts, business processes by Odoo.</li>
                                     <li class="list-group-item"> Operate/Work with Odoo Smoothly on regular basis.</li>
                                     <li class="list-group-item"> Configure Odoo using the standard modules.</li>
-                                    <li class="list-group-item"> Change the look and feel from the front-end(GUI) rather than aneed of technical knowledge.</li>
+                                    <li class="list-group-item"> Change the look and feel from the front-end (GUI) rather than a need of technical knowledge.</li>
                                 </ul>
 
                             </div>
@@ -479,7 +480,7 @@
                                     </div>
                                     <ul class="list-group">
                                         <li class="list-group-item">Product Category &amp; product Configuration with Order point</li>
-                                        <li class="list-group-item">Customers/Suppliers</li>
+                                        <li class="list-group-item">Customers/Vendors</li>
                                         <li class="list-group-item">Pricelist and auto Segmentation</li>
                                         <li class="list-group-item">Convert Lead to Opportunity &amp; Customer management</li>
                                         <li class="list-group-item">Schedule Phone Calls and Meetings</li>
@@ -500,7 +501,6 @@
                                         <li class="list-group-item">Purchase Requisition and Purchase Order Management</li>
                                         <li class="list-group-item">Partial and Full Shipment / Delivery</li>
                                         <li class="list-group-item">Product Expiry and Warranty</li>
-                                        <li class="list-group-item">After Sales Service (Helpdesk)</li>
                                     </ul>
                                 </div>
                             </div>

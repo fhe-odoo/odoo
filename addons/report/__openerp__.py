@@ -6,7 +6,6 @@
     'description': """
 Report
         """,
-    'author': 'OpenERP SA',
     'depends': ['base', 'web'],
     'data': [
         'views/layouts.xml',
@@ -14,6 +13,7 @@ Report
         'data/report_paperformat.xml',
         'security/ir.model.access.csv',
         'views/report.xml',
+        'views/ir_actions.xml',
     ],
     'installable': True,
     'auto_install': True,

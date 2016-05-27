@@ -1,25 +1,8 @@
 # -*- coding: utf-8 -*-
-##############################################################################
-#
-#    OpenERP, Open Source Management Solution
-#    Copyright (C) 2004-2010 Tiny SPRL (<http://tiny.be>).
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as
-#    published by the Free Software Foundation, either version 3 of the
-#    License, or (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU Affero General Public License for more details.
-#
-#    You should have received a copy of the GNU Affero General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-##############################################################################
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from openerp.osv import fields,osv
+from openerp.addons.base.res.res_partner import WARNING_MESSAGE, WARNING_HELP
 
 class res_partner(osv.osv):
     _inherit = 'res.partner'
@@ -29,13 +12,18 @@ class res_partner(osv.osv):
         # The current user may not have access rights for sale orders
         try:
             for partner in self.browse(cr, uid, ids, context):
-                res[partner.id] = len(partner.sale_order_ids)
+                res[partner.id] = len(partner.sale_order_ids) + len(partner.mapped('child_ids.sale_order_ids'))
         except:
             pass
         return res
 
     _columns = {
         'sale_order_count': fields.function(_sale_order_count, string='# of Sales Order', type='integer'),
-        'sale_order_ids': fields.one2many('sale.order','partner_id','Sales Order')
+        'sale_order_ids': fields.one2many('sale.order', 'partner_id', 'Sales Order'),
+        'sale_warn': fields.selection(WARNING_MESSAGE, 'Sales Order', help=WARNING_HELP, required=True),
+        'sale_warn_msg': fields.text('Message for Sales Order'),
     }
 
+    _defaults = {
+        'sale_warn': 'no-message',
+    }

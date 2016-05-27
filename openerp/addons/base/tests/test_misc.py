@@ -1,9 +1,12 @@
-import unittest2
+# -*- coding: utf-8 -*-
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-from openerp.tools import misc
+import unittest
+
+from odoo.tools import misc
 
 
-class test_countingstream(unittest2.TestCase):
+class TestCountingStream(unittest.TestCase):
     def test_empty_stream(self):
         s = misc.CountingStream(iter([]))
         self.assertEqual(s.index, -1)
@@ -32,6 +35,3 @@ class test_countingstream(unittest2.TestCase):
         self.assertEqual(s.index, 0)
         self.assertIsNone(next(s, None))
         self.assertEqual(s.index, 0)
-
-if __name__ == '__main__':
-    unittest2.main()

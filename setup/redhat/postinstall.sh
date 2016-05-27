@@ -13,8 +13,8 @@ if ! getent passwd | grep -q "^odoo:"; then
     groupadd $ODOO_GROUP
     adduser --system --no-create-home $ODOO_USER -g $ODOO_GROUP
 fi
-# Register "$ODOO_USER" as a postgres superuser
-su - postgres -c "createuser -s $ODOO_USER" 2> /dev/null || true
+# Register "$ODOO_USER" as a postgres user with "Create DB" role attribute
+su - postgres -c "createuser -d -R -S $ODOO_USER" 2> /dev/null || true
 # Configuration file
 mkdir -p $ODOO_CONFIGURATION_DIR
 # can't copy debian config-file as addons_path is not the same
@@ -54,4 +54,4 @@ ExecStart=/usr/bin/odoo.py --config=/etc/odoo/openerp-server.conf
 [Install]
 WantedBy=multi-user.target
 EOF
-easy_install pyPdf vatnumber pydot psycogreen
+easy_install pyPdf vatnumber pydot psycogreen suds ofxparse XlsxWriter

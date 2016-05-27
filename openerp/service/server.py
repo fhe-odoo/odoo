@@ -7,7 +7,6 @@ import logging
 import os
 import os.path
 import platform
-import psutil
 import random
 import select
 import signal
@@ -16,14 +15,16 @@ import subprocess
 import sys
 import threading
 import time
-import unittest2
+import unittest
 
 import werkzeug.serving
+from werkzeug.debug import DebuggedApplication
 
 if os.name == 'posix':
     # Unix only for workers
     import fcntl
     import resource
+    import psutil
 else:
     # Windows shim
     signal.SIGHUP = -1
@@ -38,18 +39,24 @@ import openerp
 from openerp.modules.registry import RegistryManager
 from openerp.release import nt_service_name
 import openerp.tools.config as config
-from openerp.tools.misc import stripped_sys_argv, dumpstacks
+from openerp.tools import stripped_sys_argv, dumpstacks, log_ormcache_stats
 
 _logger = logging.getLogger(__name__)
 
 try:
     import watchdog
     from watchdog.observers import Observer
-    from watchdog.events import FileCreatedEvent, FileModifiedEvent
+    from watchdog.events import FileCreatedEvent, FileModifiedEvent, FileMovedEvent
 except ImportError:
     watchdog = None
 
 SLEEP_INTERVAL = 60     # 1 min
+
+def memory_info(process):
+    """ psutil < 2.0 does not have memory_info, >= 3.0 does not have
+    get_memory_info """
+    pmem = (getattr(process, 'memory_info', None) or process.get_memory_info)()
+    return (pmem.rss, pmem.vms)
 
 #----------------------------------------------------------
 # Werkzeug WSGI servers patched
@@ -123,9 +130,9 @@ class FSWatcher(object):
             self.observer.schedule(self, path, recursive=True)
 
     def dispatch(self, event):
-        if isinstance(event, (FileCreatedEvent, FileModifiedEvent)):
+        if isinstance(event, (FileCreatedEvent, FileModifiedEvent, FileMovedEvent)):
             if not event.is_directory:
-                path = event.src_path
+                path = getattr(event, 'dest_path', event.src_path)
                 if path.endswith('.py'):
                     try:
                         source = open(path, 'rb').read() + '\n'
@@ -166,6 +173,10 @@ class CommonServer(object):
         try:
             sock.shutdown(socket.SHUT_RDWR)
         except socket.error, e:
+            if e.errno == errno.EBADF:
+                # Werkzeug > 0.9.6 closes the socket itself (see commit
+                # https://github.com/mitsuhiko/werkzeug/commit/4d8ca089)
+                return
             # On OSX, socket shutdowns both sides if any side closes it
             # causing an error 57 'Socket is not connected' on shutdown
             # of the other side (or something), see
@@ -250,12 +261,13 @@ class ThreadedServer(CommonServer):
             signal.signal(signal.SIGCHLD, self.signal_handler)
             signal.signal(signal.SIGHUP, self.signal_handler)
             signal.signal(signal.SIGQUIT, dumpstacks)
+            signal.signal(signal.SIGUSR1, log_ormcache_stats)
         elif os.name == 'nt':
             import win32api
             win32api.SetConsoleCtrlHandler(lambda sig: self.signal_handler(sig, None), 1)
 
         test_mode = config['test_enable'] or config['test_file']
-        if not stop or test_mode:
+        if test_mode or (config['xmlrpc'] and not stop):
             # some tests need the http deamon to be available...
             self.http_spawn()
 
@@ -343,6 +355,7 @@ class GeventServer(CommonServer):
 
         if os.name == 'posix':
             signal.signal(signal.SIGQUIT, dumpstacks)
+            signal.signal(signal.SIGUSR1, log_ormcache_stats)
 
         gevent.spawn(self.watch_parent)
         self.httpd = WSGIServer((self.interface, self.port), self.app)
@@ -370,10 +383,14 @@ class PreforkServer(CommonServer):
     """
     def __init__(self, app):
         # config
-        self.address = (config['xmlrpc_interface'] or '0.0.0.0', config['xmlrpc_port'])
+        self.address = config['xmlrpc'] and \
+            (config['xmlrpc_interface'] or '0.0.0.0', config['xmlrpc_port'])
         self.population = config['workers']
         self.timeout = config['limit_time_real']
         self.limit_request = config['limit_request']
+        self.cron_timeout = config['limit_time_real_cron'] or None
+        if self.cron_timeout == -1:
+            self.cron_timeout = self.timeout
         # working vars
         self.beat = 4
         self.app = app
@@ -464,6 +481,9 @@ class PreforkServer(CommonServer):
             elif sig == signal.SIGQUIT:
                 # dump stacks on kill -3
                 self.dumpstacks()
+            elif sig == signal.SIGUSR1:
+                # log ormcache stats on kill -SIGUSR1
+                log_ormcache_stats()
             elif sig == signal.SIGTTIN:
                 # increase number of workers
                 self.population += 1
@@ -493,16 +513,20 @@ class PreforkServer(CommonServer):
         for (pid, worker) in self.workers.items():
             if worker.watchdog_timeout is not None and \
                     (now - worker.watchdog_time) >= worker.watchdog_timeout:
-                _logger.error("Worker (%s) timeout", pid)
+                _logger.error("%s (%s) timeout after %ss",
+                              worker.__class__.__name__,
+                              pid,
+                              worker.watchdog_timeout)
                 self.worker_kill(pid, signal.SIGKILL)
 
     def process_spawn(self):
-        while len(self.workers_http) < self.population:
-            self.worker_spawn(WorkerHTTP, self.workers_http)
+        if config['xmlrpc']:
+            while len(self.workers_http) < self.population:
+                self.worker_spawn(WorkerHTTP, self.workers_http)
+            if not self.long_polling_pid:
+                self.long_polling_spawn()
         while len(self.workers_cron) < config['max_cron_threads']:
             self.worker_spawn(WorkerCron, self.workers_cron)
-        if not self.long_polling_pid:
-            self.long_polling_spawn()
 
     def sleep(self):
         try:
@@ -539,13 +563,15 @@ class PreforkServer(CommonServer):
         signal.signal(signal.SIGTTIN, self.signal_handler)
         signal.signal(signal.SIGTTOU, self.signal_handler)
         signal.signal(signal.SIGQUIT, dumpstacks)
+        signal.signal(signal.SIGUSR1, log_ormcache_stats)
 
-        # listen to socket
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.socket.setblocking(0)
-        self.socket.bind(self.address)
-        self.socket.listen(8 * self.population)
+        if self.address:
+            # listen to socket
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.socket.setblocking(0)
+            self.socket.bind(self.address)
+            self.socket.listen(8 * self.population)
 
     def stop(self, graceful=True):
         if self.long_polling_pid is not None:
@@ -556,15 +582,21 @@ class PreforkServer(CommonServer):
             _logger.info("Stopping gracefully")
             limit = time.time() + self.timeout
             for pid in self.workers.keys():
-                self.worker_kill(pid, signal.SIGTERM)
+                self.worker_kill(pid, signal.SIGINT)
             while self.workers and time.time() < limit:
+                try:
+                    self.process_signals()
+                except KeyboardInterrupt:
+                    _logger.info("Forced shutdown.")
+                    break
                 self.process_zombie()
                 time.sleep(0.1)
         else:
             _logger.info("Stopping forcefully")
         for pid in self.workers.keys():
             self.worker_kill(pid, signal.SIGTERM)
-        self.socket.close()
+        if self.socket:
+            self.socket.close()
 
     def run(self, preload, stop):
         self.start()
@@ -638,7 +670,7 @@ class Worker(object):
             _logger.info("Worker (%d) max request (%s) reached.", self.pid, self.request_count)
             self.alive = False
         # Reset the worker if it consumes too much memory (e.g. caused by a memory leak).
-        rss, vms = psutil.Process(os.getpid()).get_memory_info()
+        rss, vms = memory_info(psutil.Process(os.getpid()))
         if vms > config['limit_memory_soft']:
             _logger.info('Worker (%d) virtual memory limit (%s) reached.', self.pid, vms)
             self.alive = False      # Commit suicide after the request.
@@ -651,7 +683,7 @@ class Worker(object):
         r = resource.getrusage(resource.RUSAGE_SELF)
         cpu_time = r.ru_utime + r.ru_stime
         def time_expired(n, stack):
-            _logger.info('Worker (%d) CPU time limit (%s) reached.', config['limit_time_cpu'])
+            _logger.info('Worker (%d) CPU time limit (%s) reached.', self.pid, config['limit_time_cpu'])
             # We dont suicide in such case
             raise Exception('CPU time limit exceeded.')
         signal.signal(signal.SIGXCPU, time_expired)
@@ -667,11 +699,13 @@ class Worker(object):
         _logger.info("Worker %s (%s) alive", self.__class__.__name__, self.pid)
         # Reseed the random number generator
         random.seed()
-        # Prevent fd inherientence close_on_exec
-        flags = fcntl.fcntl(self.multi.socket, fcntl.F_GETFD) | fcntl.FD_CLOEXEC
-        fcntl.fcntl(self.multi.socket, fcntl.F_SETFD, flags)
-        # reset blocking status
-        self.multi.socket.setblocking(0)
+        if self.multi.socket:
+            # Prevent fd inheritance: close_on_exec
+            flags = fcntl.fcntl(self.multi.socket, fcntl.F_GETFD) | fcntl.FD_CLOEXEC
+            fcntl.fcntl(self.multi.socket, fcntl.F_SETFD, flags)
+            # reset blocking status
+            self.multi.socket.setblocking(0)
+
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
         signal.signal(signal.SIGCHLD, signal.SIG_DFL)
@@ -687,7 +721,9 @@ class Worker(object):
                 self.multi.pipe_ping(self.watchdog_pipe)
                 self.sleep()
                 self.process_work()
-            _logger.info("Worker (%s) exiting. request_count: %s.", self.pid, self.request_count)
+            _logger.info("Worker (%s) exiting. request_count: %s, registry count: %s.",
+                         self.pid, self.request_count,
+                         len(openerp.modules.registry.RegistryManager.registries))
             self.stop()
         except Exception:
             _logger.exception("Worker (%s) Exception occured, exiting..." % self.pid)
@@ -734,6 +770,7 @@ class WorkerCron(Worker):
         # The variable db_index is keeping track of the next database to
         # process.
         self.db_index = 0
+        self.watchdog_timeout = multi.cron_timeout  # Use a distinct value for CRON Worker
 
     def sleep(self):
         # Really sleep once all the databases have been processed.
@@ -745,7 +782,7 @@ class WorkerCron(Worker):
         if config['db_name']:
             db_names = config['db_name'].split(',')
         else:
-            db_names = openerp.service.db.exp_list(True)
+            db_names = openerp.service.db.list_dbs(True)
         return db_names
 
     def process_work(self):
@@ -759,7 +796,7 @@ class WorkerCron(Worker):
             self.setproctitle(db_name)
             if rpc_request_flag:
                 start_time = time.time()
-                start_rss, start_vms = psutil.Process(os.getpid()).get_memory_info()
+                start_rss, start_vms = memory_info(psutil.Process(os.getpid()))
 
             import openerp.addons.base as base
             base.ir.ir_cron.ir_cron._acquire_job(db_name)
@@ -770,7 +807,7 @@ class WorkerCron(Worker):
                 openerp.sql_db.close_db(db_name)
             if rpc_request_flag:
                 run_time = time.time() - start_time
-                end_rss, end_vms = psutil.Process(os.getpid()).get_memory_info()
+                end_rss, end_vms = memory_info(psutil.Process(os.getpid()))
                 vms_diff = (end_vms - start_vms) / 1024
                 logline = '%s time:%.3fs mem: %sk -> %sk (diff: %sk)' % \
                     (db_name, run_time, start_vms / 1024, end_vms / 1024, vms_diff)
@@ -787,7 +824,8 @@ class WorkerCron(Worker):
     def start(self):
         os.nice(10)     # mommy always told me to be nice with others...
         Worker.start(self)
-        self.multi.socket.close()
+        if self.multi.socket:
+            self.multi.socket.close()
 
 #----------------------------------------------------------
 # start/stop public api
@@ -836,12 +874,12 @@ def load_test_file_py(registry, test_file):
         if mod_mod:
             mod_path, _ = os.path.splitext(getattr(mod_mod, '__file__', ''))
             if test_path == mod_path:
-                suite = unittest2.TestSuite()
-                for t in unittest2.TestLoader().loadTestsFromModule(mod_mod):
+                suite = unittest.TestSuite()
+                for t in unittest.TestLoader().loadTestsFromModule(mod_mod):
                     suite.addTest(t)
                 _logger.log(logging.INFO, 'running tests %s.', mod_mod.__name__)
                 stream = openerp.modules.module.TestStream()
-                result = unittest2.TextTestRunner(verbosity=2, stream=stream).run(suite)
+                result = unittest.TextTestRunner(verbosity=2, stream=stream).run(suite)
                 success = result.wasSuccessful()
                 if hasattr(registry._assertion_report,'report_result'):
                     registry._assertion_report.report_result(success)
@@ -888,12 +926,14 @@ def start(preload=None, stop=False):
         server = ThreadedServer(openerp.service.wsgi_server.application)
 
     watcher = None
-    if config['dev_mode']:
+    if 'reload' in config['dev_mode']:
         if watchdog:
             watcher = FSWatcher()
             watcher.start()
         else:
             _logger.warning("'watchdog' module not installed. Code autoreload feature is disabled")
+    if 'werkzeug' in config['dev_mode']:
+        server.app = DebuggedApplication(server.app, evalex=True)
 
     rc = server.run(preload, stop)
 
@@ -913,5 +953,3 @@ def restart():
         threading.Thread(target=_reexec).start()
     else:
         os.kill(server.pid, signal.SIGHUP)
-
-# vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:

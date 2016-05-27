@@ -1,40 +1,19 @@
 # -*- coding: utf-8 -*-
-##############################################################################
-#
-#    OpenERP, Open Source Management Solution
-#    Copyright (C) 2004-2010 Tiny SPRL (<http://tiny.be>).
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as
-#    published by the Free Software Foundation, either version 3 of the
-#    License, or (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU Affero General Public License for more details.
-#
-#    You should have received a copy of the GNU Affero General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-##############################################################################
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 from openerp.osv import fields, osv
 import openerp.addons.decimal_precision as dp
+from openerp.tools import float_compare, float_round
 from openerp.tools.translate import _
 import product
+from openerp import SUPERUSER_ID
+from openerp.exceptions import UserError
 
 
 class stock_landed_cost(osv.osv):
     _name = 'stock.landed.cost'
     _description = 'Stock Landed Cost'
     _inherit = 'mail.thread'
-
-    _track = {
-        'state': {
-            'stock_landed_costs.mt_stock_landed_cost_open': lambda self, cr, uid, obj, ctx=None: obj['state'] == 'done',
-        },
-    }
 
     def _total_amount(self, cr, uid, ids, name, args, context=None):
         result = {}
@@ -63,15 +42,14 @@ class stock_landed_cost(osv.osv):
                 if move.product_id.valuation != 'real_time' or move.product_id.cost_method != 'real':
                     continue
                 total_cost = 0.0
-                total_qty = move.product_qty
                 weight = move.product_id and move.product_id.weight * move.product_qty
                 volume = move.product_id and move.product_id.volume * move.product_qty
                 for quant in move.quant_ids:
-                    total_cost += quant.cost
-                vals = dict(product_id=move.product_id.id, move_id=move.id, quantity=move.product_uom_qty, former_cost=total_cost * total_qty, weight=weight, volume=volume)
+                    total_cost += quant.cost * quant.qty
+                vals = dict(product_id=move.product_id.id, move_id=move.id, quantity=move.product_qty, former_cost=total_cost, weight=weight, volume=volume)
                 lines.append(vals)
         if not lines:
-            raise osv.except_osv(_('Error!'), _('The selected picking does not contain any move that would be impacted by landed costs. Landed costs are only possible for products configured in real time valuation with real price costing method. Please make sure it is the case, or you selected the correct picking'))
+            raise UserError(_('The selected picking does not contain any move that would be impacted by landed costs. Landed costs are only possible for products configured in real time valuation with real price costing method. Please make sure it is the case, or you selected the correct picking'))
         return lines
 
     _columns = {
@@ -81,7 +59,7 @@ class stock_landed_cost(osv.osv):
         'cost_lines': fields.one2many('stock.landed.cost.lines', 'cost_id', 'Cost Lines', states={'done': [('readonly', True)]}, copy=True),
         'valuation_adjustment_lines': fields.one2many('stock.valuation.adjustment.lines', 'cost_id', 'Valuation Adjustments', states={'done': [('readonly', True)]}),
         'description': fields.text('Item Description', states={'done': [('readonly', True)]}),
-        'amount_total': fields.function(_total_amount, type='float', string='Total', digits_compute=dp.get_precision('Account'),
+        'amount_total': fields.function(_total_amount, type='float', string='Total', digits=0,
             store={
                 'stock.landed.cost': (lambda self, cr, uid, ids, c={}: ids, ['cost_lines'], 20),
                 'stock.landed.cost.lines': (_get_cost_line, ['price_unit', 'quantity', 'cost_id'], 20),
@@ -89,7 +67,7 @@ class stock_landed_cost(osv.osv):
         ),
         'state': fields.selection([('draft', 'Draft'), ('done', 'Posted'), ('cancel', 'Cancelled')], 'State', readonly=True, track_visibility='onchange', copy=False),
         'account_move_id': fields.many2one('account.move', 'Journal Entry', readonly=True, copy=False),
-        'account_journal_id': fields.many2one('account.journal', 'Account Journal', required=True),
+        'account_journal_id': fields.many2one('account.journal', 'Account Journal', required=True, states={'done': [('readonly', True)]}),
     }
 
     _defaults = {
@@ -103,13 +81,13 @@ class stock_landed_cost(osv.osv):
         cost_product = line.cost_line_id and line.cost_line_id.product_id
         if not cost_product:
             return False
-        accounts = product_obj.get_product_accounts(cr, uid, line.product_id.product_tmpl_id.id, context=context)
-        debit_account_id = accounts['property_stock_valuation_account_id']
-        already_out_account_id = accounts['stock_account_output']
-        credit_account_id = line.cost_line_id.account_id.id or cost_product.property_account_expense.id or cost_product.categ_id.property_account_expense_categ.id
+        accounts = product_obj.browse(cr, uid, line.product_id.product_tmpl_id.id, context=context).get_product_accounts()
+        debit_account_id = accounts.get('stock_valuation', False) and accounts['stock_valuation'].id or False
+        already_out_account_id = accounts['stock_output'].id
+        credit_account_id = line.cost_line_id.account_id.id or cost_product.property_account_expense_id.id or cost_product.categ_id.property_account_expense_categ_id.id
 
         if not credit_account_id:
-            raise osv.except_osv(_('Error!'), _('Please configure Stock Expense Account for product: %s.') % (cost_product.name))
+            raise UserError(_('Please configure Stock Expense Account for product: %s.') % (cost_product.name))
 
         return self._create_account_move_line(cr, uid, line, move_id, credit_account_id, debit_account_id, qty_out, already_out_account_id, context=context)
 
@@ -119,47 +97,77 @@ class stock_landed_cost(osv.osv):
         Afterwards, for the goods that are already out of stock, we should create the out moves
         """
         aml_obj = self.pool.get('account.move.line')
-        aml_obj.create(cr, uid, {
+        user_obj = self.pool.get('res.users')
+        if context is None:
+            context = {}
+        ctx = context.copy()
+        ctx['check_move_validity'] = False
+        base_line = {
             'name': line.name,
             'move_id': move_id,
             'product_id': line.product_id.id,
             'quantity': line.quantity,
-            'debit': line.additional_landed_cost,
-            'account_id': debit_account_id
-        }, context=context)
-        aml_obj.create(cr, uid, {
-            'name': line.name,
-            'move_id': move_id,
-            'product_id': line.product_id.id,
-            'quantity': line.quantity,
-            'credit': line.additional_landed_cost,
-            'account_id': credit_account_id
-        }, context=context)
+        }
+        debit_line = dict(base_line, account_id=debit_account_id)
+        credit_line = dict(base_line, account_id=credit_account_id)
+        diff = line.additional_landed_cost
+        if diff > 0:
+            debit_line['debit'] = diff
+            credit_line['credit'] = diff
+        else:
+            # negative cost, reverse the entry
+            debit_line['credit'] = -diff
+            credit_line['debit'] = -diff
+        aml_obj.create(cr, uid, debit_line, context=ctx)
+        aml_obj.create(cr, uid, credit_line, context=ctx)
         
         #Create account move lines for quants already out of stock
         if qty_out > 0:
-            aml_obj.create(cr, uid, {
-                                     'name': line.name + ": " + str(qty_out) + _(' already out'),
-                                     'move_id': move_id,
-                                     'product_id': line.product_id.id,
-                                     'quantity': qty_out,
-                                     'credit': line.additional_landed_cost * qty_out / line.quantity,
-                                     'account_id': debit_account_id
-                                     }, context=context)
-            aml_obj.create(cr, uid, {
-                                     'name': line.name + ": " + str(qty_out) + _(' already out'),
-                                     'move_id': move_id,
-                                     'product_id': line.product_id.id,
-                                     'quantity': qty_out,
-                                     'debit': line.additional_landed_cost * qty_out / line.quantity,
-                                     'account_id': already_out_account_id
-                                     }, context=context)
+            debit_line = dict(base_line,
+                              name=(line.name + ": " + str(qty_out) + _(' already out')),
+                              quantity=qty_out,
+                              account_id=already_out_account_id)
+            credit_line = dict(base_line,
+                              name=(line.name + ": " + str(qty_out) + _(' already out')),
+                              quantity=qty_out,
+                              account_id=debit_account_id)
+            diff = diff * qty_out / line.quantity
+            if diff > 0:
+                debit_line['debit'] = diff
+                credit_line['credit'] = diff
+            else:
+                # negative cost, reverse the entry
+                debit_line['credit'] = -diff
+                credit_line['debit'] = -diff
+            aml_obj.create(cr, uid, debit_line, context=ctx)
+            aml_obj.create(cr, uid, credit_line, context=ctx)
+
+            if user_obj.browse(cr, uid, [uid], context=context).company_id.anglo_saxon_accounting:
+                debit_line = dict(base_line,
+                                  name=(line.name + ": " + str(qty_out) + _(' already out')),
+                                  quantity=qty_out,
+                                  account_id=credit_account_id)
+                credit_line = dict(base_line,
+                                  name=(line.name + ": " + str(qty_out) + _(' already out')),
+                                  quantity=qty_out,
+                                  account_id=already_out_account_id)
+
+                if diff > 0:
+                    debit_line['debit'] = diff
+                    credit_line['credit'] = diff
+                else:
+                    # negative cost, reverse the entry
+                    debit_line['credit'] = -diff
+                    credit_line['debit'] = -diff
+                aml_obj.create(cr, uid, debit_line, context=ctx)
+                aml_obj.create(cr, uid, credit_line, context=ctx)
+
+        self.pool.get('account.move').assert_balanced(cr, uid, [move_id], context=context)
         return True
 
     def _create_account_move(self, cr, uid, cost, context=None):
         vals = {
             'journal_id': cost.account_journal_id.id,
-            'period_id': self.pool.get('account.period').find(cr, uid, cost.date, context=context)[0],
             'date': cost.date,
             'ref': cost.name
         }
@@ -178,9 +186,12 @@ class stock_landed_cost(osv.osv):
             else:
                 costcor[valuation_line.cost_line_id] = valuation_line.additional_landed_cost
             tot += valuation_line.additional_landed_cost
-        res = (tot == landed_cost.amount_total)
+
+        prec = self.pool['decimal.precision'].precision_get(cr, uid, 'Account')
+        # float_compare returns 0 for equal amounts
+        res = not bool(float_compare(tot, landed_cost.amount_total, precision_digits=prec))
         for costl in costcor.keys():
-            if costcor[costl] != costl.price_unit:
+            if float_compare(costcor[costl], costl.price_unit, precision_digits=prec):
                 res = False
         return res
 
@@ -188,39 +199,79 @@ class stock_landed_cost(osv.osv):
         quant_obj = self.pool.get('stock.quant')
 
         for cost in self.browse(cr, uid, ids, context=context):
+            if cost.state != 'draft':
+                raise UserError(_('Only draft landed costs can be validated'))
             if not cost.valuation_adjustment_lines or not self._check_sum(cr, uid, cost, context=context):
-                raise osv.except_osv(_('Error!'), _('You cannot validate a landed cost which has no valid valuation lines.'))
+                raise UserError(_('You cannot validate a landed cost which has no valid valuation adjustments lines. Did you click on Compute?'))
             move_id = self._create_account_move(cr, uid, cost, context=context)
-            quant_dict = {}
             for line in cost.valuation_adjustment_lines:
                 if not line.move_id:
                     continue
                 per_unit = line.final_cost / line.quantity
                 diff = per_unit - line.former_cost_per_unit
-                quants = [quant for quant in line.move_id.quant_ids]
-                for quant in quants:
-                    if quant.id not in quant_dict:
-                        quant_dict[quant.id] = quant.cost + diff
+
+                # If the precision required for the variable diff is larger than the accounting
+                # precision, inconsistencies between the stock valuation and the accounting entries
+                # may arise.
+                # For example, a landed cost of 15 divided in 13 units. If the products leave the
+                # stock one unit at a time, the amount related to the landed cost will correspond to
+                # round(15/13, 2)*13 = 14.95. To avoid this case, we split the quant in 12 + 1, then
+                # record the difference on the new quant.
+                # We need to make sure to able to extract at least one unit of the product. There is
+                # an arbitrary minimum quantity set to 2.0 from which we consider we can extract a
+                # unit and adapt the cost.
+                curr_rounding = line.move_id.company_id.currency_id.rounding
+                diff_rounded = float_round(diff, precision_rounding=curr_rounding)
+                diff_correct = diff_rounded
+                quants = line.move_id.quant_ids.sorted(key=lambda r: r.qty, reverse=True)
+                quant_correct = False
+                if quants\
+                        and float_compare(quants[0].product_id.uom_id.rounding, 1.0, precision_digits=1) == 0\
+                        and float_compare(line.quantity * diff, line.quantity * diff_rounded, precision_rounding=curr_rounding) != 0\
+                        and float_compare(quants[0].qty, 2.0, precision_rounding=quants[0].product_id.uom_id.rounding) >= 0:
+                    # Search for existing quant of quantity = 1.0 to avoid creating a new one
+                    quant_correct = quants.filtered(lambda r: float_compare(r.qty, 1.0, precision_rounding=quants[0].product_id.uom_id.rounding) == 0)
+                    if not quant_correct:
+                        quant_correct = quants[0]._quant_split(quants[0].qty - 1.0)
                     else:
-                        quant_dict[quant.id] += diff
+                        quant_correct = quant_correct[0]
+                        quants = quants - quant_correct
+                    diff_correct += (line.quantity * diff) - (line.quantity * diff_rounded)
+                    diff = diff_rounded
+
+                quant_dict = {}
+                for quant in quants:
+                    quant_dict[quant.id] = quant.cost + diff
+                if quant_correct:
+                    quant_dict[quant_correct.id] = quant_correct.cost + diff_correct
                 for key, value in quant_dict.items():
-                    quant_obj.write(cr, uid, key, {'cost': value}, context=context)
+                    quant_obj.write(cr, SUPERUSER_ID, key, {'cost': value}, context=context)
                 qty_out = 0
                 for quant in line.move_id.quant_ids:
                     if quant.location_id.usage != 'internal':
                         qty_out += quant.qty
                 self._create_accounting_entries(cr, uid, line, move_id, qty_out, context=context)
             self.write(cr, uid, cost.id, {'state': 'done', 'account_move_id': move_id}, context=context)
+            self.pool.get('account.move').post(cr, uid, [move_id], context=context)
         return True
 
     def button_cancel(self, cr, uid, ids, context=None):
-        self.write(cr, uid, ids, {'state': 'cancel'}, context=context)
-        return True
+        cost = self.browse(cr, uid, ids, context=context)
+        if cost.state == 'done':
+            raise UserError(_('Validated landed costs cannot be cancelled, '
+                            'but you could create negative landed costs to reverse them'))
+        return cost.write({'state': 'cancel'})
+
+    def unlink(self, cr, uid, ids, context=None):
+        # cancel or raise first
+        self.button_cancel(cr, uid, ids, context)
+        return super(stock_landed_cost, self).unlink(cr, uid, ids, context=context)
 
     def compute_landed_cost(self, cr, uid, ids, context=None):
         line_obj = self.pool.get('stock.valuation.adjustment.lines')
         unlink_ids = line_obj.search(cr, uid, [('cost_id', 'in', ids)], context=context)
         line_obj.unlink(cr, uid, unlink_ids, context=context)
+        digits = dp.get_precision('Product Price')(cr)
         towrite_dict = {}
         for cost in self.browse(cr, uid, ids, context=None):
             if not cost.picking_ids:
@@ -243,6 +294,7 @@ class stock_landed_cost(osv.osv):
                 total_line += 1
 
             for line in cost.cost_lines:
+                value_split = 0.0
                 for valuation in cost.valuation_adjustment_lines:
                     value = 0.0
                     if valuation.cost_line_id and valuation.cost_line_id.id == line.id:
@@ -263,6 +315,12 @@ class stock_landed_cost(osv.osv):
                         else:
                             value = (line.price_unit / total_line)
 
+                        if digits:
+                            value = float_round(value, precision_digits=digits[1], rounding_method='UP')
+                            fnc = min if line.price_unit > 0 else max
+                            value = fnc(value, line.price_unit - value_split)
+                            value_split += value
+
                         if valuation.id not in towrite_dict:
                             towrite_dict[valuation.id] = value
                         else:
@@ -271,6 +329,12 @@ class stock_landed_cost(osv.osv):
             for key, value in towrite_dict.items():
                 line_obj.write(cr, uid, key, {'additional_landed_cost': value}, context=context)
         return True
+
+    def _track_subtype(self, cr, uid, ids, init_values, context=None):
+        record = self.browse(cr, uid, ids[0], context=context)
+        if 'state' in init_values and record.state == 'done':
+            return 'stock_landed_costs.mt_stock_landed_cost_open'
+        return super(stock_landed_cost, self)._track_subtype(cr, uid, ids, init_values, context=context)
 
 
 class stock_landed_cost_lines(osv.osv):
@@ -286,7 +350,7 @@ class stock_landed_cost_lines(osv.osv):
         result['name'] = product.name
         result['split_method'] = product.split_method
         result['price_unit'] = product.standard_price
-        result['account_id'] = product.property_account_expense and product.property_account_expense.id or product.categ_id.property_account_expense_categ.id
+        result['account_id'] = product.property_account_expense_id and product.property_account_expense_id.id or product.categ_id.property_account_expense_categ_id.id
         return {'value': result}
 
     _columns = {
@@ -295,7 +359,7 @@ class stock_landed_cost_lines(osv.osv):
         'product_id': fields.many2one('product.product', 'Product', required=True),
         'price_unit': fields.float('Cost', required=True, digits_compute=dp.get_precision('Product Price')),
         'split_method': fields.selection(product.SPLIT_METHOD, string='Split Method', required=True),
-        'account_id': fields.many2one('account.account', 'Account', domain=[('type', '<>', 'view'), ('type', '<>', 'closed')]),
+        'account_id': fields.many2one('account.account', 'Account', domain=[('internal_type', '!=', 'view'), ('internal_type', '!=', 'closed'), ('deprecated', '=', False)]),
     }
 
 class stock_valuation_adjustment_lines(osv.osv):
@@ -331,9 +395,9 @@ class stock_valuation_adjustment_lines(osv.osv):
         'weight': fields.float('Weight', digits_compute=dp.get_precision('Product Unit of Measure')),
         'volume': fields.float('Volume', digits_compute=dp.get_precision('Product Unit of Measure')),
         'former_cost': fields.float('Former Cost', digits_compute=dp.get_precision('Product Price')),
-        'former_cost_per_unit': fields.function(_amount_final, multi='cost', string='Former Cost(Per Unit)', type='float', digits_compute=dp.get_precision('Account'), store=True),
+        'former_cost_per_unit': fields.function(_amount_final, multi='cost', string='Former Cost(Per Unit)', type='float', store=True, digits=0),
         'additional_landed_cost': fields.float('Additional Landed Cost', digits_compute=dp.get_precision('Product Price')),
-        'final_cost': fields.function(_amount_final, multi='cost', string='Final Cost', type='float', digits_compute=dp.get_precision('Account'), store=True),
+        'final_cost': fields.function(_amount_final, multi='cost', string='Final Cost', type='float', store=True, digits=0),
     }
 
     _defaults = {
@@ -341,5 +405,3 @@ class stock_valuation_adjustment_lines(osv.osv):
         'weight': 1.0,
         'volume': 1.0,
     }
-
-# vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:

@@ -10,61 +10,57 @@ class TestRelatedField(common.TransactionCase):
 
     def setUp(self):
         super(TestRelatedField, self).setUp()
-        self.partner = self.registry('res.partner')
-        self.company = self.registry('res.company')
+        self.alpha = self.registry('test_new_api.alpha')
+        self.bravo = self.registry('test_new_api.bravo')
+        self.alpha_id = self.alpha.create(self.cr, self.uid, {'name': 'Alpha'})
+        self.alpha.create(self.cr, self.uid, {'name': 'Beta'})
+        self.bravo.create(self.cr, self.uid, {'alpha_id': self.alpha_id})
 
     def test_0_related(self):
         """ test an usual related field """
-        # find a company with a non-null partner_id
-        ids = self.company.search(self.cr, self.uid, [('partner_id', '!=', False)], limit=1)
-        id = ids[0]
-
-        # find partners that satisfy [('partner_id.company_id', '=', id)]
-        company_ids = self.company.search(self.cr, self.uid, [('partner_id', '=', id)])
-        partner_ids1 = self.partner.search(self.cr, self.uid, [('company_id', 'in', company_ids)])
-        partner_ids2 = self.partner.search(self.cr, self.uid, [('related_company_partner_id', '=', id)])
-        self.assertEqual(partner_ids1, partner_ids2)
+        # find bravos that satisfy [('alpha_id.name', '=', 'Alpha')]
+        alpha_ids = self.alpha.search(self.cr, self.uid, [('name', '=', 'Alpha')])
+        bravo_ids1 = self.bravo.search(self.cr, self.uid, [('alpha_id', 'in', alpha_ids)])
+        bravo_ids2 = self.bravo.search(self.cr, self.uid, [('alpha_name', '=', 'Alpha')])
+        self.assertEqual(bravo_ids1, bravo_ids2)
 
     def do_test_company_field(self, field):
-        # get a partner with a non-null company_id
-        ids = self.partner.search(self.cr, self.uid, [('company_id', '!=', False)], limit=1)
-        partner = self.partner.browse(self.cr, self.uid, ids[0])
+        # get a bravo with a non-null alpha_id
+        ids = self.bravo.search(self.cr, self.uid, [('alpha_id', '!=', False)])
+        bravo = self.bravo.browse(self.cr, self.uid, ids[0])
 
         # check reading related field
-        self.assertEqual(partner[field], partner.company_id)
+        self.assertEqual(bravo[field], bravo.alpha_id)
 
         # check that search on related field is equivalent to original field
-        ids1 = self.partner.search(self.cr, self.uid, [('company_id', '=', partner.company_id.id)])
-        ids2 = self.partner.search(self.cr, self.uid, [(field, '=', partner.company_id.id)])
+        ids1 = self.bravo.search(self.cr, self.uid, [('alpha_id', '=', bravo.alpha_id.id)])
+        ids2 = self.bravo.search(self.cr, self.uid, [(field, '=', bravo.alpha_id.id)])
         self.assertEqual(ids1, ids2)
 
     def test_1_single_related(self):
         """ test a related field with a single indirection like fields.related('foo') """
-        self.do_test_company_field('single_related_company_id')
+        self.do_test_company_field('related_alpha_id')
 
-    def test_2_related_related(self):
+    def test_2_double_related(self):
         """ test a related field referring to a related field """
-        self.do_test_company_field('related_related_company_id')
+        self.do_test_company_field('related_related_alpha_id')
 
     def test_3_read_write(self):
         """ write on a related field """
-        # find a company with a non-null partner_id
-        company_ids = self.company.search(self.cr, self.uid, [('partner_id', '!=', False)], limit=1)
-        company = self.company.browse(self.cr, self.uid, company_ids[0])
+        # find an alpha with a non-null name
+        alpha = self.alpha.browse(self.cr, self.uid, self.alpha_id)
+        self.assertTrue(alpha.name)
 
-        # find partners that satisfy [('partner_id.company_id', '=', company.id)]
-        partner_ids = self.partner.search(self.cr, self.uid, [('related_company_partner_id', '=', company.id)])
-        partner = self.partner.browse(self.cr, self.uid, partner_ids[0])
+        # find partners that satisfy [('alpha_id.name', '=', alpha.name)]
+        bravo_ids = self.bravo.search(self.cr, self.uid, [('alpha_name', '=', alpha.name)])
+        self.assertTrue(bravo_ids)
+        bravo = self.bravo.browse(self.cr, self.uid, bravo_ids[0])
 
-        # create a new partner, and assign it to company
-        new_partner_id = self.partner.create(self.cr, self.uid, {'name': 'Foo'})
-        partner.write({'related_company_partner_id': new_partner_id})
-
-        company = self.company.browse(self.cr, self.uid, company_ids[0])
-        self.assertEqual(company.partner_id.id, new_partner_id)
-
-        partner = self.partner.browse(self.cr, self.uid, partner_ids[0])
-        self.assertEqual(partner.related_company_partner_id.id, new_partner_id)
+        # change the name of alpha through the related field, and check result
+        NAME = 'Monthy Pythons'
+        bravo.write({'alpha_name': NAME})
+        self.assertEqual(bravo.alpha_id.name, NAME)
+        self.assertEqual(bravo.alpha_name, NAME)
 
 
 class TestPropertyField(common.TransactionCase):
@@ -110,9 +106,6 @@ class TestPropertyField(common.TransactionCase):
         self.partner._columns.update({
             'property_country': fields.property(type='many2one', relation="res.country", string="Country by company"),
         })
-        self.partner._all_columns.update({
-            'property_country': fields.column_info('property_country', self.partner._columns['property_country'], None, None, None),
-        })
         self.partner._field_create(cr)
 
         partner_id = self.partner.create(cr, alice, {
@@ -145,9 +138,12 @@ class TestHtmlField(common.TransactionCase):
 % if object.some_field and not object.oriented:
 <table>
     % if object.other_field:
-    <tr>
+    <tr style="margin: 0px; border: 10px solid black;">
         ${object.mako_thing}
         <td>
+    </tr>
+    <tr class="custom_class">
+        This is some html.
     </tr>
     % endif
     <tr>
@@ -163,7 +159,17 @@ class TestHtmlField(common.TransactionCase):
         self.assertEqual(partner.comment, some_ugly_html, 'Error in HTML field: content was sanitized but field has sanitize=False')
 
         self.partner._columns.update({
-            'comment': fields.html('Unsecure Html', sanitize=True),
+            'comment': fields.html('Unsecure Html', sanitize=True, strip_classes=False),
+        })
+        self.partner.write(cr, uid, [pid], {
+            'comment': some_ugly_html,
+        }, context=context)
+        partner = self.partner.browse(cr, uid, pid, context=context)
+        # classes are kept
+        self.assertIn('<tr class="', partner.comment)
+
+        self.partner._columns.update({
+            'comment': fields.html('Unsecure Html', sanitize=True, strip_classes=True),
         })
         self.partner.write(cr, uid, [pid], {
             'comment': some_ugly_html,
@@ -172,5 +178,13 @@ class TestHtmlField(common.TransactionCase):
         # sanitize should have closed tags left open in the original html
         self.assertIn('</table>', partner.comment, 'Error in HTML field: content does not seem to have been sanitized despise sanitize=True')
         self.assertIn('</td>', partner.comment, 'Error in HTML field: content does not seem to have been sanitized despise sanitize=True')
+        self.assertIn('<tr style="', partner.comment, 'Style attr should not have been stripped')
+        # sanitize does not keep classes if asked to
+        self.assertNotIn('<tr class="', partner.comment)
+
+        self.partner._columns['comment'] = fields.html('Stripped Html', sanitize=True, strip_style=True)
+        self.partner.write(cr, uid, [pid], {'comment': some_ugly_html}, context=context)
+        partner = self.partner.browse(cr, uid, pid, context=context)
+        self.assertNotIn('<tr style="', partner.comment, 'Style attr should have been stripped')
 
         self.partner._columns = old_columns

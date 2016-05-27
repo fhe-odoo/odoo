@@ -1,13 +1,20 @@
-openerp.board = function(instance) {
-var QWeb = instance.web.qweb,
-    _t = instance.web._t;
+odoo.define('board.dashboard', function (require) {
+"use strict";
 
-if (!instance.board) {
-    /** @namespace */
-    instance.board = {};
-}
+var ActionManager = require('web.ActionManager');
+var core = require('web.core');
+var data = require('web.data');
+var Dialog = require('web.Dialog');
+var FavoriteMenu = require('web.FavoriteMenu');
+var form_common = require('web.form_common');
+var Model = require('web.DataModel');
+var pyeval = require('web.pyeval');
+var ViewManager = require('web.ViewManager');
 
-instance.web.form.DashBoard = instance.web.form.FormWidget.extend({
+var _t = core._t;
+var QWeb = core.qweb;
+
+var DashBoard = form_common.FormWidget.extend({
     events: {
         'click .oe_dashboard_link_change_layout': 'on_change_layout',
         'click h2.oe_header span.oe_header_txt': function (ev) {
@@ -22,10 +29,12 @@ instance.web.form.DashBoard = instance.web.form.FormWidget.extend({
         this.form_template = 'DashBoard';
         this.actions_attrs = {};
         this.action_managers = [];
+        this.set_title = _t('My Dashboard');
     },
     start: function() {
         var self = this;
         this._super.apply(this, arguments);
+        this.$el.addClass('o_dashboard');
 
         this.$('.oe_dashboard_column').sortable({
             connectWith: '.oe_dashboard_column',
@@ -34,6 +43,7 @@ instance.web.form.DashBoard = instance.web.form.FormWidget.extend({
         }).bind('sortstop', self.do_save_dashboard);
 
         var old_title = this.__parentedParent.get('title');
+        self.__parentedParent.set({ 'title': this.set_title});
         this.__parentedParent.on('load_record', self, function(){
             self.__parentedParent.set({ 'title': old_title});
         });
@@ -63,7 +73,7 @@ instance.web.form.DashBoard = instance.web.form.FormWidget.extend({
                 span.text(new_name).show();
                 input.css('visibility','hidden');
                 self.do_save_dashboard();
-        }
+        };
         input.unbind()
         .val(span.text())
         .change(function(event){
@@ -82,13 +92,14 @@ instance.web.form.DashBoard = instance.web.form.FormWidget.extend({
         var qdict = {
             current_layout : this.$el.find('.oe_dashboard').attr('data-layout')
         };
-        var $dialog = new instance.web.Dialog(this, {
-                            title: _t("Edit Layout"),
-                        }, QWeb.render('DashBoard.layouts', qdict)).open();
-        $dialog.$el.find('li').click(function() {
+        var dialog = new Dialog(this, {
+            title: _t("Edit Layout"),
+            $content: QWeb.render('DashBoard.layouts', qdict)
+        }).open();
+        dialog.$el.find('li').click(function() {
             var layout = $(this).attr('data-layout');
             self.do_change_layout(layout);
-            $dialog.$dialog_box.modal('hide'); 
+            dialog.close();
         });
     },
     do_change_layout: function(new_layout) {
@@ -133,7 +144,6 @@ instance.web.form.DashBoard = instance.web.form.FormWidget.extend({
         }
     },
     do_save_dashboard: function() {
-        var self = this;
         var board = {
                 form_title : this.view.fields_view.arch.attrs.string,
                 style : this.$el.find('.oe_dashboard').attr('data-layout'),
@@ -169,21 +179,21 @@ instance.web.form.DashBoard = instance.web.form.FormWidget.extend({
 
         // evaluate action_attrs context and domain
         action_attrs.context_string = action_attrs.context;
-        action_attrs.context = instance.web.pyeval.eval(
+        action_attrs.context = pyeval.eval(
             'context', action_attrs.context || {});
         action_attrs.domain_string = action_attrs.domain;
-        action_attrs.domain = instance.web.pyeval.eval(
+        action_attrs.domain = pyeval.eval(
             'domain', action_attrs.domain || [], action_attrs.context);
         if (action_attrs.context['dashboard_merge_domains_contexts'] === false) {
             // TODO: replace this 6.1 workaround by attribute on <action/>
             action.context = action_attrs.context || {};
             action.domain = action_attrs.domain || [];
         } else {
-            action.context = instance.web.pyeval.eval(
+            action.context = pyeval.eval(
                 'contexts', [action.context || {}, action_attrs.context]);
-            action.domain = instance.web.pyeval.eval(
+            action.domain = pyeval.eval(
                 'domains', [action_attrs.domain, action.domain || []],
-                action.context)
+                action.context);
         }
 
         var action_orig = _.extend({ flags : {} }, action);
@@ -197,7 +207,7 @@ instance.web.form.DashBoard = instance.web.form.FormWidget.extend({
         }
 
         action.flags = {
-            search_view : false,
+            search_view : true, // Required to get the records
             sidebar : false,
             views_switcher : false,
             action_buttons : false,
@@ -205,55 +215,56 @@ instance.web.form.DashBoard = instance.web.form.FormWidget.extend({
             headless: true,
             low_profile: true,
             display_title: false,
+            search_disable_custom_filters: true,
             list: {
                 selectable: false
             }
         };
-        var am = new instance.web.ActionManager(this),
+        var am = new ActionManager(this),
             // FIXME: ideally the dashboard view shall be refactored like kanban.
             $action = $('#' + this.view.element_id + '_action_' + index);
         $action.parent().data('action_attrs', action_attrs);
         this.action_managers.push(am);
-        am.appendTo($action);
-        am.do_action(action);
-        am.do_action = function (action) {
-            self.do_action(action);
-        };
-        if (am.inner_widget) {
-            var new_form_action = function(id, editable) {
-                var new_views = [];
-                _.each(action_orig.views, function(view) {
-                    new_views[view[1] === 'form' ? 'unshift' : 'push'](view);
-                });
-                if (!new_views.length || new_views[0][1] !== 'form') {
-                    new_views.unshift([false, 'form']);
-                }
-                action_orig.views = new_views;
-                action_orig.res_id = id;
-                action_orig.flags = {
-                    form: {
-                        "initial_mode": editable ? "edit" : "view",
-                    }
-                };
-                self.do_action(action_orig);
-            };
-            var list = am.inner_widget.views.list;
-            if (list) {
-                list.created.done(function() {
-                    $(list.controller.groups).off('row_link').on('row_link', function(e, id) {
-                        new_form_action(id);
-                    });
-                });
-            }
-            var kanban = am.inner_widget.views.kanban;
-            if (kanban) {
-                kanban.created.done(function() {
-                    kanban.controller.open_record = function(id, editable) {
-                        new_form_action(id, editable);
+        am.appendTo($action).then(function () {
+            am.do_action(action).then(function () {
+                if (am.inner_widget) {
+                    var new_form_action = function(id, editable) {
+                        var new_views = [];
+                        _.each(action_orig.views, function(view) {
+                            new_views[view[1] === 'form' ? 'unshift' : 'push'](view);
+                        });
+                        if (!new_views.length || new_views[0][1] !== 'form') {
+                            new_views.unshift([false, 'form']);
+                        }
+                        action_orig.views = new_views;
+                        action_orig.res_id = id;
+                        action_orig.flags = {
+                            form: {
+                                "initial_mode": editable ? "edit" : "view",
+                            }
+                        };
+                        self.do_action(action_orig);
                     };
-                });
-            }
-        }
+                    var list = am.inner_widget.views.list;
+                    if (list) {
+                        list.loaded.done(function() {
+                            $(list.controller.groups).off('row_link').on('row_link', function(e, id) {
+                                new_form_action(id);
+                            });
+                        });
+                    }
+                    var kanban = am.inner_widget.views.kanban;
+                    if (kanban) {
+                        kanban.loaded.done(function() {
+                            kanban.controller.open_record = function(event, editable) {
+                                new_form_action(event.data.id, editable);
+                            };
+                        });
+                    }
+                }
+            });
+            am.do_action = self.do_action.bind(self);
+        });
     },
     renderElement: function() {
         this._super();
@@ -292,7 +303,8 @@ instance.web.form.DashBoard = instance.web.form.FormWidget.extend({
         action_manager.do_action(view_manager.action);
     }
 });
-instance.web.form.DashBoardLegacy = instance.web.form.DashBoard.extend({
+
+var DashBoardLegacy = DashBoard.extend({
     renderElement: function() {
         if (this.node.tag == 'hpaned') {
             this.node.attrs.layout = '2-1';
@@ -301,7 +313,7 @@ instance.web.form.DashBoardLegacy = instance.web.form.DashBoard.extend({
         }
         this.node.tag = 'board';
         _.each(this.node.children, function(child) {
-            if (child.tag.indexOf('child') == 0) {
+            if (child.tag.indexOf('child') === 0) {
                 child.tag = 'column';
                 var actions = [], first_child = child.children[0];
                 if (first_child && first_child.tag == 'vpaned') {
@@ -316,61 +328,65 @@ instance.web.form.DashBoardLegacy = instance.web.form.DashBoard.extend({
     }
 });
 
-instance.web.form.tags.add('hpaned', 'instance.web.form.DashBoardLegacy');
-instance.web.form.tags.add('vpaned', 'instance.web.form.DashBoardLegacy');
-instance.web.form.tags.add('board', 'instance.web.form.DashBoard');
+core.form_tag_registry
+    .add('hpaned', DashBoardLegacy)
+    .add('vpaned', DashBoardLegacy)
+    .add('board', DashBoard);
 
 
-instance.web.search.FavoriteMenu.include({
-    prepare_dropdown_menu: function (filters) {
+FavoriteMenu.include({
+    start: function () {
         var self = this;
-        this._super(filters);
-        this.$('.favorites-menu').append(QWeb.render('SearchView.addtodashboard'));
-        var $add_to_dashboard = this.$('.add-to-dashboard');
-        this.$add_dashboard_btn = $add_to_dashboard.eq(2).find('button');
-        this.$add_dashboard_input = $add_to_dashboard.eq(1).find('input');
-        this.$add_dashboard_link = $add_to_dashboard.first().find('a');
-        var title = this.searchview.getParent().title;
-        this.$add_dashboard_input.val(title);
-        this.$add_dashboard_link.click(function () {
-            self.toggle_dashboard_menu();
+        var am = this.findAncestor(function (a) {
+            return a instanceof ActionManager;
         });
-        this.$add_dashboard_btn.click(this.proxy('add_dashboard'));
+        if (am && am.get_inner_widget() instanceof ViewManager) {
+            this.view_manager = am.get_inner_widget();
+            this.add_to_dashboard_available = true;
+            this.$('.o_favorites_menu').append(QWeb.render('SearchView.addtodashboard'));
+            this.$add_to_dashboard = this.$('.o_add_to_dashboard');
+            this.$add_dashboard_btn = this.$add_to_dashboard.eq(1).find('button');
+            this.$add_dashboard_input = this.$add_to_dashboard.eq(0).find('input');
+            this.$add_dashboard_link = this.$('.o_add_to_dashboard_link');
+            var title = this.searchview.get_title();
+            this.$add_dashboard_input.val(title);
+            this.$add_dashboard_link.click(function (e) {
+                e.preventDefault();
+                self.toggle_dashboard_menu();
+            });
+            this.$add_dashboard_btn.click(this.proxy('add_dashboard'));
+        }
+        return this._super();
     },
     toggle_dashboard_menu: function (is_open) {
         this.$add_dashboard_link
-            .toggleClass('closed-menu', !is_open)
-            .toggleClass('open-menu', is_open);
-        this.$add_dashboard_btn.toggle(is_open);
-        this.$add_dashboard_input.toggle(is_open);
-        if (this.$add_dashboard_link.hasClass('open-menu')) {
+            .toggleClass('o_closed_menu', !(_.isUndefined(is_open)) ? !is_open : undefined)
+            .toggleClass('o_open_menu', is_open);
+        this.$add_to_dashboard.toggle(is_open);
+        if (this.$add_dashboard_link.hasClass('o_open_menu')) {
             this.$add_dashboard_input.focus();
         }
     },
     close_menus: function () {
-        this.toggle_dashboard_menu(false);
+        if (this.add_to_dashboard_available) {
+            this.toggle_dashboard_menu(false);
+        }
         this._super();
     },
     add_dashboard: function () {
-        var self = this,
-            view_manager = this.findAncestor(function (a) {
-                return a instanceof instance.web.ViewManager
-            });
-        if (!view_manager.action) {
-            this.do_warn(_t("Can't find dashboard action"));
-            return;
-        }
-        var searchview = view_manager.searchview,
-            data = searchview.build_search_data(),
-            context = new instance.web.CompoundContext(searchview.dataset.get_context() || []),
-            domain = new instance.web.CompoundDomain(searchview.dataset.get_domain() || []);
-        _.each(data.contexts, context.add, context);
-        _.each(data.domains, domain.add, domain);
+        var self = this;
+
+        var search_data = this.searchview.build_search_data(),
+            context = new data.CompoundContext(this.searchview.dataset.get_context() || []),
+            domain = new data.CompoundDomain(this.searchview.dataset.get_domain() || []);
+        _.each(search_data.contexts, context.add, context);
+        _.each(search_data.domains, domain.add, domain);
 
         context.add({
-            group_by: instance.web.pyeval.eval('groupbys', data.groupbys || [])
+            group_by: pyeval.eval('groupbys', search_data.groupbys || [])
         });
-        var c = instance.web.pyeval.eval('context', context);
+        context.add(this.view_manager.active_view.controller.get_context());
+        var c = pyeval.eval('context', context);
         for(var k in c) {
             if (c.hasOwnProperty(k) && /^search_default_/.test(k)) {
                 delete c[k];
@@ -378,28 +394,24 @@ instance.web.search.FavoriteMenu.include({
         }
         this.toggle_dashboard_menu(false);
         c.dashboard_merge_domains_contexts = false;
-        var d = instance.web.pyeval.eval('domain', domain),
-            board = new instance.web.Model('board.board'),
+        var d = pyeval.eval('domain', domain),
+            board = new Model('board.board'),
             name = self.$add_dashboard_input.val();
         
-        board.call('list', [board.context()])
-            .then(function (board_list) {
-                return self.rpc('/board/add_to_dashboard', {
-                    menu_id: board_list[0].id,                    
-                    action_id: view_manager.action.id,
-                    context_to_save: c,
-                    domain: d,
-                    view_mode: view_manager.active_view.type,
-                    name: name,
-                });
-            }).then(function (r) {
-                if (r) {
-                    self.do_notify(_.str.sprintf(_t("'%s' added to dashboard"), name), '');
-                } else {
-                    self.do_warn(_t("Could not add filter to dashboard"));
-                }
-            });
+        return self.rpc('/board/add_to_dashboard', {
+            action_id: self.action_id,
+            context_to_save: c,
+            domain: d,
+            view_mode: self.view_manager.active_view.type,
+            name: name,
+        }).then(function (r) {
+            if (r) {
+                self.do_notify(_.str.sprintf(_t("'%s' added to dashboard"), name), '');
+            } else {
+                self.do_warn(_t("Could not add filter to dashboard"));
+            }
+        });
     },
 });
 
-};
+});

@@ -12,6 +12,7 @@ class mother(models.Model):
     }
     _defaults = {
         'name': 'Foo',
+        'state': 'a',
     }
 
     surname = fields.Char(compute='_compute_surname')
@@ -25,10 +26,9 @@ class mother(models.Model):
 # in the child object
 class daughter(models.Model):
     _name = 'test.inherit.daughter'
-    _inherits = {'test.inherit.mother': 'template_id'}
 
     template_id = fields.Many2one('test.inherit.mother', 'Template',
-                                  required=True, ondelete='cascade')
+                                  delegate=True, required=True, ondelete='cascade')
     field_in_daughter = fields.Char('Field1')
 
 
@@ -39,12 +39,13 @@ class mother(models.Model):
     _inherit = 'test.inherit.mother'
 
     field_in_mother = fields.Char()
+    partner_id = fields.Many2one('res.partner')
 
     # extend the name field: make it required and change its default value
     name = fields.Char(required=True, default='Bar')
 
-    # extend the selection of the state field
-    state = fields.Selection(selection_add=[('c', 'C')])
+    # extend the selection of the state field, and discard its default value
+    state = fields.Selection(selection_add=[('c', 'C')], default=None)
 
     # override the computed field, and extend its dependencies
     @api.one
@@ -72,4 +73,76 @@ class daughter(models.Model):
     # change the default value of an inherited field
     name = fields.Char(default='Baz')
 
-# vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:
+
+class res_partner(models.Model):
+    _inherit = 'res.partner'
+
+    # define a one2many field based on the inherited field partner_id
+    daughter_ids = fields.One2many('test.inherit.daughter', 'partner_id')
+
+
+# Check the overriding of property fields by non-property fields.
+# Contribution by Adrien Peiffer (ACSONE).
+class test_inherit_property(models.Model):
+    _name = 'test.inherit.property'
+
+    _columns = {
+        'name': osv.fields.char('Name', required=True),
+        'property_foo': osv.fields.property(string='Foo', type='integer'),
+        'property_bar': osv.fields.property(string='Bar', type='integer'),
+    }
+
+class test_inherit_property(models.Model):
+    _inherit = 'test.inherit.property'
+
+    @api.multi
+    def _get_foo(self, name, arg):
+        return dict.fromkeys(self.ids, 42)
+
+    _columns = {
+        # override property_foo with an old-api function field
+        'property_foo': osv.fields.function(_get_foo, type='integer', string='Foo'),
+    }
+
+    # override property_bar with a new-api computed field
+    property_bar = fields.Integer(compute='_compute_bar', company_dependent=False)
+
+    @api.multi
+    def _compute_bar(self):
+        for record in self:
+            record.property_bar = 42
+
+
+#
+# Extend a parent model after is has been inherited in a child model
+#
+class Parent1(models.AbstractModel):
+    _name = 'test.inherit.parent'
+
+    def stuff(self):
+        return 'P1'
+
+
+class Child(models.AbstractModel):
+    _name = 'test.inherit.child'
+    _inherit = 'test.inherit.parent'
+
+    bar = fields.Integer()
+
+    def stuff(self):
+        return super(Child, self).stuff() + 'C1'
+
+
+class Parent2(models.AbstractModel):
+    _inherit = 'test.inherit.parent'
+
+    foo = fields.Integer()
+
+    _sql_constraints = [('unique_foo', 'UNIQUE(foo)', 'foo must be unique')]
+
+    def stuff(self):
+        return super(Parent2, self).stuff() + 'P2'
+
+    @api.constrains('foo')
+    def _check_foo(self):
+        pass

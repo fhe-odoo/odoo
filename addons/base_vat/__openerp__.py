@@ -1,23 +1,5 @@
 # -*- coding: utf-8 -*-
-##############################################################################
-#
-#    OpenERP, Open Source Management Solution
-#    Copyright (C) 2004-2010 Tiny SPRL (<http://tiny.be>).
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as
-#    published by the Free Software Foundation, either version 3 of the
-#    License, or (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU Affero General Public License for more details.
-#
-#    You should have received a copy of the GNU Affero General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-##############################################################################
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 {
     'name': 'VAT Number Validation',
@@ -38,7 +20,7 @@ There are two different levels of VAT number validation:
       rules for the country, usually a simple check digit. This is quick and 
       always available, but allows numbers that are perhaps not truly allocated,
       or not valid anymore.
-      
+
     * When the "VAT VIES Check" option is enabled (in the configuration of the user's
       Company), VAT numbers will be instead submitted to the online EU VIES
       database, which will truly verify that the number is valid and currently
@@ -52,13 +34,10 @@ Supported countries currently include EU countries, and a few non-EU countries
 such as Chile, Colombia, Mexico, Norway or Russia. For unsupported countries,
 only the country code will be validated.
     """,
-    'author': 'OpenERP SA',
     'depends': ['account'],
     'website': 'https://www.odoo.com/page/accounting',
-    'data': ['base_vat_view.xml'],
-    'installable': True,
-    'auto_install': False,
-    'images': ['images/1_partner_vat.jpeg'],
+    'data': [
+        'views/res_partner_views.xml',
+        'views/res_company_views.xml',
+    ],
 }
-
-# vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:

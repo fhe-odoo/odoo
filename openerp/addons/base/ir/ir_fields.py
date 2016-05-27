@@ -1,23 +1,20 @@
 # -*- coding: utf-8 -*-
-import cStringIO
-import datetime
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
+
 import functools
 import itertools
-import time
 
 import psycopg2
 import pytz
 
-from openerp import models, api, _
-from openerp.tools import DEFAULT_SERVER_DATE_FORMAT, DEFAULT_SERVER_DATETIME_FORMAT, ustr
+from odoo import api, fields, models, _
+from odoo.tools import ustr
 
-REFERENCING_FIELDS = set([None, 'id', '.id'])
+REFERENCING_FIELDS = {None, 'id', '.id'}
 def only_ref_fields(record):
-    return dict((k, v) for k, v in record.iteritems()
-                if k in REFERENCING_FIELDS)
+    return {k: v for k, v in record.iteritems() if k in REFERENCING_FIELDS}
 def exclude_ref_fields(record):
-    return dict((k, v) for k, v in record.iteritems()
-                if k not in REFERENCING_FIELDS)
+    return {k: v for k, v in record.iteritems() if k not in REFERENCING_FIELDS}
 
 CREATE = lambda values: (0, False, values)
 UPDATE = lambda id, values: (1, id, values)
@@ -31,11 +28,25 @@ class ImportWarning(Warning):
     """ Used to send warnings upwards the stack during the import process """
     pass
 
-class ConversionNotFound(ValueError): pass
+class ConversionNotFound(ValueError):
+    pass
 
 
-class ir_fields_converter(models.Model):
+class IrFieldsConverter(models.AbstractModel):
     _name = 'ir.fields.converter'
+
+    @api.model
+    def _format_import_error(self, error_type, error_msg, error_params=(), error_args=None):
+        # sanitize error params for later formatting by the import system
+        sanitize = lambda p: p.replace('%', '%%') if isinstance(p, basestring) else p
+        if error_params:
+            if isinstance(error_params, basestring):
+                error_params = sanitize(error_params)
+            elif isinstance(error_params, dict):
+                error_params = {k: sanitize(v) for k, v in error_params.iteritems()}
+            elif isinstance(error_params, tuple):
+                error_params = tuple(map(sanitize, error_params))
+        return error_type(error_msg % error_params, error_args)
 
     @api.model
     def for_model(self, model, fromtype=str):
@@ -59,7 +70,7 @@ class ir_fields_converter(models.Model):
         def fn(record, log):
             converted = {}
             for field, value in record.iteritems():
-                if field in (None, 'id', '.id'):
+                if field in REFERENCING_FIELDS:
                     continue
                 if not value:
                     converted[field] = False
@@ -148,29 +159,36 @@ class ir_fields_converter(models.Model):
         if value.lower() in falses:
             return False, []
 
-        return True, [ImportWarning(
-            _(u"Unknown value '%s' for boolean field '%%(field)s', assuming '%s'")
-                % (value, yes), {
-                'moreinfo': _(u"Use '1' for yes and '0' for no")
-            })]
+        return True, [self._format_import_error(
+            ImportWarning,
+            _(u"Unknown value '%s' for boolean field '%%(field)s', assuming '%s'"),
+            (value, yes),
+            {'moreinfo': _(u"Use '1' for yes and '0' for no")}
+        )]
 
     @api.model
     def _str_to_integer(self, model, field, value):
         try:
             return int(value), []
         except ValueError:
-            raise ValueError(
-                _(u"'%s' does not seem to be an integer for field '%%(field)s'")
-                % value)
+            raise self._format_import_error(
+                ValueError,
+                _(u"'%s' does not seem to be an integer for field '%%(field)s'"),
+                value
+            )
 
     @api.model
     def _str_to_float(self, model, field, value):
         try:
             return float(value), []
         except ValueError:
-            raise ValueError(
-                _(u"'%s' does not seem to be a number for field '%%(field)s'")
-                % value)
+            raise self._format_import_error(
+                ValueError,
+                _(u"'%s' does not seem to be a number for field '%%(field)s'"),
+                value
+            )
+
+    _str_to_monetary = _str_to_float
 
     @api.model
     def _str_id(self, model, field, value):
@@ -181,13 +199,15 @@ class ir_fields_converter(models.Model):
     @api.model
     def _str_to_date(self, model, field, value):
         try:
-            time.strptime(value, DEFAULT_SERVER_DATE_FORMAT)
-            return value, []
+            parsed_value = fields.Date.from_string(value)
+            return fields.Date.to_string(parsed_value), []
         except ValueError:
-            raise ValueError(
-                _(u"'%s' does not seem to be a valid date for field '%%(field)s'") % value, {
-                    'moreinfo': _(u"Use the format '%s'") % u"2012-12-31"
-                })
+            raise self._format_import_error(
+                ValueError,
+                _(u"'%s' does not seem to be a valid date for field '%%(field)s'"),
+                value,
+                {'moreinfo': _(u"Use the format '%s'") % u"2012-12-31"}
+            )
 
     @api.model
     def _input_tz(self):
@@ -212,18 +232,19 @@ class ir_fields_converter(models.Model):
     @api.model
     def _str_to_datetime(self, model, field, value):
         try:
-            parsed_value = datetime.datetime.strptime(
-                value, DEFAULT_SERVER_DATETIME_FORMAT)
+            parsed_value = fields.Datetime.from_string(value)
         except ValueError:
-            raise ValueError(
-                _(u"'%s' does not seem to be a valid datetime for field '%%(field)s'") % value, {
-                    'moreinfo': _(u"Use the format '%s'") % u"2012-12-31 23:59:59"
-                })
+            raise self._format_import_error(
+                ValueError,
+                _(u"'%s' does not seem to be a valid datetime for field '%%(field)s'"),
+                value,
+                {'moreinfo': _(u"Use the format '%s'") % u"2012-12-31 23:59:59"}
+            )
 
         input_tz = self._input_tz()# Apply input tz to the parsed naive datetime
         dt = input_tz.localize(parsed_value, is_dst=False)
         # And convert to UTC before reformatting for writing
-        return dt.astimezone(pytz.UTC).strftime(DEFAULT_SERVER_DATETIME_FORMAT), []
+        return fields.Datetime.to_string(dt.astimezone(pytz.UTC)), []
 
     @api.model
     def _get_translations(self, types, src):
@@ -251,12 +272,12 @@ class ir_fields_converter(models.Model):
             if value == unicode(item) or value in labels:
                 return item, []
 
-        raise ValueError(
-            _(u"Value '%s' not found in selection field '%%(field)s'") % (
-                value), {
-                'moreinfo': [_label or unicode(item) for item, _label in selection
-                             if _label or item]
-            })
+        raise self._format_import_error(
+            ValueError,
+            _(u"Value '%s' not found in selection field '%%(field)s'"),
+            value,
+            {'moreinfo': [_label or unicode(item) for item, _label in selection if _label or item]}
+        )
 
     @api.model
     def db_id_for(self, model, field, subfield, value):
@@ -298,8 +319,10 @@ class ir_fields_converter(models.Model):
                     id = tentative_id
             except psycopg2.DataError:
                 # type error
-                raise ValueError(
-                    _(u"Invalid database id '%s' for the field '%%(field)s'") % value,
+                raise self._format_import_error(
+                    ValueError,
+                    _(u"Invalid database id '%s' for the field '%%(field)s'"),
+                    value,
                     {'moreinfo': action})
         elif subfield == 'id':
             field_type = _(u"external id")
@@ -321,12 +344,17 @@ class ir_fields_converter(models.Model):
                         % (len(ids))))
                 id, _name = ids[0]
         else:
-            raise Exception(_(u"Unknown sub-field '%s'") % subfield)
+            raise self._format_import_error(
+                Exception,
+                _(u"Unknown sub-field '%s'"),
+                subfield
+            )
 
         if id is None:
-            raise ValueError(
-                _(u"No matching record found for %(field_type)s '%(value)s' in field '%%(field)s'")
-                % {'field_type': field_type, 'value': value},
+            raise self._format_import_error(
+                ValueError,
+                _(u"No matching record found for %(field_type)s '%(value)s' in field '%%(field)s'"),
+                {'field_type': field_type, 'value': value},
                 {'moreinfo': action})
         return id, field_type, warnings
 
@@ -360,8 +388,7 @@ class ir_fields_converter(models.Model):
 
         subfield, w1 = self._referencing_subfield(record)
 
-        reference = record[subfield]
-        id, _, w2 = self.db_id_for(model, field, subfield, reference)
+        id, _, w2 = self.db_id_for(model, field, subfield, record[subfield])
         return id, w1 + w2
 
     @api.model
@@ -406,8 +433,7 @@ class ir_fields_converter(models.Model):
             if refs:
                 subfield, w1 = self._referencing_subfield(refs)
                 warnings.extend(w1)
-                reference = record[subfield]
-                id, _, w2 = self.db_id_for(model, field, subfield, reference)
+                id, _, w2 = self.db_id_for(model, field, subfield, record[subfield])
                 warnings.extend(w2)
 
             writable = convert(exclude_ref_fields(record), log)

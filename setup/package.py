@@ -1,24 +1,6 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
-##############################################################################
-#
-#    OpenERP, Open Source Management Solution
-#    Copyright (C) 2004-Today OpenERP SA (<http://www.openerp.com>).
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as
-#    published by the Free Software Foundation, either version 3 of the
-#    License, or (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU Affero General Public License for more details.
-#
-#    You should have received a copy of the GNU Affero General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-##############################################################################
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 import optparse
 import os
@@ -41,22 +23,17 @@ from tempfile import NamedTemporaryFile
 #----------------------------------------------------------
 execfile(join(dirname(__file__), '..', 'openerp', 'release.py'))
 version = version.split('-')[0]
+timestamp = time.strftime("%Y%m%d", time.gmtime())
 GPGPASSPHRASE = os.getenv('GPGPASSPHRASE')
 GPGID = os.getenv('GPGID')
-timestamp = time.strftime("%Y%m%d", time.gmtime())
 PUBLISH_DIRS = {
     'debian': 'deb',
     'redhat': 'rpm',
     'tarball': 'src',
     'windows': 'exe',
 }
-EXTENSIONS = [
-    '.tar.gz',
-    '.deb',
-    '.dsc',
-    '.changes',
-    '.noarch.rpm',
-    '.exe',
+ADDONS_NOT_TO_PUBLISH = [
+    'web_analytics'
 ]
 
 def mkdir(d):
@@ -96,27 +73,13 @@ def _rpc_count_modules(addr='http://127.0.0.1', port=8069, dbname='mycompany'):
         print("Package test: FAILED. Not able to install base.")
         raise Exception("Installation of package failed")
 
-def publish(o, type, releases):
+def publish(o, type, extensions):
     def _publish(o, release):
         arch = ''
         filename = release.split(os.path.sep)[-1]
 
-        extension = None
-        for EXTENSION in EXTENSIONS:
-            if filename.endswith(EXTENSION):
-                extension = EXTENSION
-                filename = filename.replace(extension, '')
-                break
-        if extension is None:
-            raise Exception("Extension of %s is not handled" % filename)
-
-        # keep _all or _amd64
-        if filename.count('_') > 1:
-            arch = '_' + filename.split('_')[-1]
-
         release_dir = PUBLISH_DIRS[type]
-        release_filename = 'odoo_%s.%s%s%s' % (version, timestamp, arch, extension)
-        release_path = join(o.pub, release_dir, release_filename)
+        release_path = join(o.pub, release_dir, filename)
 
         system('mkdir -p %s' % join(o.pub, release_dir))
         shutil.move(join(o.build_dir, release), release_path)
@@ -133,23 +96,21 @@ def publish(o, type, releases):
         return release_path
 
     published = []
-    if isinstance(releases, basestring):
-        published.append(_publish(o, releases))
-    elif isinstance(releases, list):
-        for release in releases:
-            published.append(_publish(o, release))
+    for extension in extensions:
+        release = glob("%s/odoo_*.%s" % (o.build_dir, extension))[0]
+        published.append(_publish(o, release))
     return published
 
 class OdooDocker(object):
     def __init__(self):
         self.log_file = NamedTemporaryFile(mode='w+b', prefix="bash", suffix=".txt", delete=False)
         self.port = 8069  # TODO sle: reliable way to get a free port?
-        self.prompt_re = '(\r\nroot@|bash-).*# '
+        self.prompt_re = '[root@nightly-tests] # '
         self.timeout = 600
 
     def system(self, command):
         self.docker.sendline(command)
-        self.docker.expect(self.prompt_re)
+        self.docker.expect_exact(self.prompt_re)
 
     def start(self, docker_image, build_dir, pub_dir):
         self.build_dir = build_dir
@@ -158,7 +119,8 @@ class OdooDocker(object):
         self.docker = pexpect.spawn(
             'docker run -v %s:/opt/release -p 127.0.0.1:%s:8069'
             ' -t -i %s /bin/bash --noediting' % (self.build_dir, self.port, docker_image),
-            timeout=self.timeout
+            timeout=self.timeout,
+            searchwindowsize=len(self.prompt_re) + 1,
         )
         time.sleep(2)  # let the bash start
         self.docker.logfile_read = self.log_file
@@ -256,30 +218,43 @@ class KVMWinTestExe(KVM):
         self.ssh("TEMP=/tmp ./%s /S" % setupfile)
         self.ssh('PGPASSWORD=openpgpwd /cygdrive/c/"Program Files"/"Odoo %s"/PostgreSQL/bin/createdb.exe -e -U openpg mycompany' % setupversion)
         self.ssh('/cygdrive/c/"Program Files"/"Odoo %s"/server/openerp-server.exe -d mycompany -i base --stop-after-init' % setupversion)
-        self.ssh('net start odoo-server-8.0')
+        self.ssh('net start odoo-server-%s' % version)
         _rpc_count_modules(port=18069)
 
 #----------------------------------------------------------
 # Stage: building
 #----------------------------------------------------------
-def _prepare_build_dir(o):
+def _prepare_build_dir(o, win32=False):
     cmd = ['rsync', '-a', '--exclude', '.git', '--exclude', '*.pyc', '--exclude', '*.pyo']
+    if not win32:
+        cmd += ['--exclude', 'setup/win32']
     system(cmd + ['%s/' % o.odoo_dir, o.build_dir])
-    for i in glob(join(o.build_dir, 'addons/*')):
-        shutil.move(i, join(o.build_dir, 'openerp/addons'))
+    try:
+        for addon_path in glob(join(o.build_dir, 'addons/*')):
+            if addon_path.split(os.path.sep)[-1] not in ADDONS_NOT_TO_PUBLISH:
+                shutil.move(addon_path, join(o.build_dir, 'openerp/addons'))
+    except shutil.Error:
+        # Thrown when the add-on is already in openerp/addons (if _prepare_build_dir
+        # has already been called once)
+        pass
 
 def build_tgz(o):
-    system(['python2', 'setup.py', '--quiet', 'sdist'], o.build_dir)
-    system(['cp', glob('%s/dist/odoo-*.tar.gz' % o.build_dir)[0], '%s/odoo.tar.gz' % o.build_dir])
+    system(['python2', 'setup.py', 'sdist', '--quiet', '--formats=gztar,zip'], o.build_dir)
+    system(['mv', glob('%s/dist/odoo-*.tar.gz' % o.build_dir)[0], '%s/odoo_%s.%s.tar.gz' % (o.build_dir, version, timestamp)])
+    system(['mv', glob('%s/dist/odoo-*.zip' % o.build_dir)[0], '%s/odoo_%s.%s.zip' % (o.build_dir, version, timestamp)])
 
 def build_deb(o):
+    # Append timestamp to version for the .dsc to refer the right .tar.gz
+    cmd=['sed', '-i', '1s/^.*$/odoo (%s.%s) stable; urgency=low/'%(version,timestamp), 'debian/changelog']
+    subprocess.call(cmd, cwd=o.build_dir)
     deb = pexpect.spawn('dpkg-buildpackage -rfakeroot -k%s' % GPGID, cwd=o.build_dir)
     deb.logfile = stdout
-    deb.expect_exact('Enter passphrase: ', timeout=1200)
-    deb.send(GPGPASSPHRASE + '\r\n')
-    deb.expect_exact('Enter passphrase: ')
-    deb.send(GPGPASSPHRASE + '\r\n')
-    deb.expect(pexpect.EOF)
+    if GPGPASSPHRASE:
+        deb.expect_exact('Enter passphrase: ', timeout=1200)
+        deb.send(GPGPASSPHRASE + '\r\n')
+        deb.expect_exact('Enter passphrase: ')
+        deb.send(GPGPASSPHRASE + '\r\n')
+    deb.expect(pexpect.EOF, timeout=1200)
     system(['mv', glob('%s/../odoo_*.deb' % o.build_dir)[0], '%s' % o.build_dir])
     system(['mv', glob('%s/../odoo_*.dsc' % o.build_dir)[0], '%s' % o.build_dir])
     system(['mv', glob('%s/../odoo_*_amd64.changes' % o.build_dir)[0], '%s' % o.build_dir])
@@ -287,25 +262,46 @@ def build_deb(o):
 
 def build_rpm(o):
     system(['python2', 'setup.py', '--quiet', 'bdist_rpm'], o.build_dir)
-    system(['cp', glob('%s/dist/odoo-*.noarch.rpm' % o.build_dir)[0], '%s/odoo.noarch.rpm' % o.build_dir])
+    system(['mv', glob('%s/dist/odoo-*.noarch.rpm' % o.build_dir)[0], '%s/odoo_%s.%s.noarch.rpm' % (o.build_dir, version, timestamp)])
 
 def build_exe(o):
     KVMWinBuildExe(o, o.vm_winxp_image, o.vm_winxp_ssh_key, o.vm_winxp_login).start()
-    system(['cp', glob('%s/openerp*.exe' % o.build_dir)[0], '%s/odoo.exe' % o.build_dir])
+    system(['cp', glob('%s/openerp*.exe' % o.build_dir)[0], '%s/odoo_%s.%s.exe' % (o.build_dir, version, timestamp)])
 
 #----------------------------------------------------------
 # Stage: testing
 #----------------------------------------------------------
+def _prepare_testing(o):
+    if not o.no_tarball:
+        subprocess.call(["mkdir", "docker_src"], cwd=o.build_dir)
+        subprocess.call(["cp", "package.dfsrc", os.path.join(o.build_dir, "docker_src", "Dockerfile")],
+                        cwd=os.path.join(o.odoo_dir, "setup"))
+        # Use rsync to copy requirements.txt in order to keep original permissions
+        subprocess.call(["rsync", "-a", "requirements.txt", os.path.join(o.build_dir, "docker_src")],
+                        cwd=os.path.join(o.odoo_dir))
+        subprocess.call(["docker", "build", "-t", "odoo-%s-src-nightly-tests" % version, "."],
+                        cwd=os.path.join(o.build_dir, "docker_src"))
+    if not o.no_debian:
+        subprocess.call(["mkdir", "docker_debian"], cwd=o.build_dir)
+        subprocess.call(["cp", "package.dfdebian", os.path.join(o.build_dir, "docker_debian", "Dockerfile")],
+                        cwd=os.path.join(o.odoo_dir, "setup"))
+        # Use rsync to copy requirements.txt in order to keep original permissions
+        subprocess.call(["rsync", "-a", "requirements.txt", os.path.join(o.build_dir, "docker_debian")],
+                        cwd=os.path.join(o.odoo_dir))
+        subprocess.call(["docker", "build", "-t", "odoo-%s-debian-nightly-tests" % version, "."],
+                        cwd=os.path.join(o.build_dir, "docker_debian"))
+    if not o.no_rpm:
+        subprocess.call(["mkdir", "docker_centos"], cwd=o.build_dir)
+        subprocess.call(["cp", "package.dfcentos", os.path.join(o.build_dir, "docker_centos", "Dockerfile")],
+                        cwd=os.path.join(o.odoo_dir, "setup"))
+        subprocess.call(["docker", "build", "-t", "odoo-%s-centos-nightly-tests" % version, "."],
+                        cwd=os.path.join(o.build_dir, "docker_centos"))
+
 def test_tgz(o):
-    with docker('debian:stable', o.build_dir, o.pub) as wheezy:
-        wheezy.release = 'odoo.tar.gz'
-        wheezy.system('apt-get update -qq && apt-get upgrade -qq -y')
-        wheezy.system("apt-get install postgresql python-dev postgresql-server-dev-all python-pip build-essential libxml2-dev libxslt1-dev libldap2-dev libsasl2-dev libssl-dev libjpeg-dev -y")
+    with docker('odoo-%s-src-nightly-tests' % version, o.build_dir, o.pub) as wheezy:
+        wheezy.release = '*.tar.gz'
         wheezy.system("service postgresql start")
-        wheezy.system('su postgres -s /bin/bash -c "pg_dropcluster --stop 9.1 main"')
-        wheezy.system('su postgres -s /bin/bash -c "pg_createcluster --start -e UTF-8 9.1 main"')
-        wheezy.system('pip install -r /opt/release/requirements.txt')
-        wheezy.system('/usr/local/bin/pip install /opt/release/%s' % wheezy.release)
+        wheezy.system('pip install /opt/release/%s' % wheezy.release)
         wheezy.system("useradd --system --no-create-home odoo")
         wheezy.system('su postgres -s /bin/bash -c "createuser -s odoo"')
         wheezy.system('su postgres -s /bin/bash -c "createdb mycompany"')
@@ -315,13 +311,9 @@ def test_tgz(o):
         wheezy.system('su odoo -s /bin/bash -c "odoo.py --addons-path=/usr/local/lib/python2.7/dist-packages/openerp/addons -d mycompany &"')
 
 def test_deb(o):
-    with docker('debian:stable', o.build_dir, o.pub) as wheezy:
+    with docker('odoo-%s-debian-nightly-tests' % version, o.build_dir, o.pub) as wheezy:
         wheezy.release = '*.deb'
-        wheezy.system('/usr/bin/apt-get update -qq && /usr/bin/apt-get upgrade -qq -y')
-        wheezy.system("apt-get install postgresql -y")
         wheezy.system("service postgresql start")
-        wheezy.system('su postgres -s /bin/bash -c "pg_dropcluster --stop 9.1 main"')
-        wheezy.system('su postgres -s /bin/bash -c "pg_createcluster --start -e UTF-8 9.1 main"')
         wheezy.system('su postgres -s /bin/bash -c "createdb mycompany"')
         wheezy.system('/usr/bin/dpkg -i /opt/release/%s' % wheezy.release)
         wheezy.system('/usr/bin/apt-get install -f -y')
@@ -329,18 +321,9 @@ def test_deb(o):
         wheezy.system('su odoo -s /bin/bash -c "odoo.py -c /etc/odoo/openerp-server.conf -d mycompany &"')
 
 def test_rpm(o):
-    with docker('centos:centos7', o.build_dir, o.pub) as centos7:
-        centos7.release = 'odoo.noarch.rpm'
-        # Dependencies
-        centos7.system('yum install -d 0 -e 0 epel-release -y')
-        centos7.system('yum update -d 0 -e 0 -y')
-        # Manual install/start of postgres
-        centos7.system('yum install -d 0 -e 0 postgresql postgresql-server postgresql-libs postgresql-contrib postgresql-devel -y')
-        centos7.system('mkdir -p /var/lib/postgres/data')
-        centos7.system('chown -R postgres:postgres /var/lib/postgres/data')
-        centos7.system('chmod 0700 /var/lib/postgres/data')
-        centos7.system('su postgres -c "initdb -D /var/lib/postgres/data -E UTF-8"')
-        centos7.system('cp /usr/share/pgsql/postgresql.conf.sample /var/lib/postgres/data/postgresql.conf')
+    with docker('odoo-%s-centos-nightly-tests' % version, o.build_dir, o.pub) as centos7:
+        centos7.release = '*.noarch.rpm'
+        # Start postgresql
         centos7.system('su postgres -c "/usr/bin/pg_ctl -D /var/lib/postgres/data start"')
         centos7.system('sleep 5')
         centos7.system('su postgres -c "createdb mycompany"')
@@ -419,7 +402,7 @@ def options():
     op.add_option("-b", "--build-dir", default=build_dir, help="build directory (%default)", metavar="DIR")
     op.add_option("-p", "--pub", default=None, help="pub directory (%default)", metavar="DIR")
     op.add_option("", "--no-testing", action="store_true", help="don't test the builded packages")
-    op.add_option("-v", "--version", default='8.0', help="version (%default)")
+    op.add_option("-v", "--version", default='9.0', help="version (%default)")
 
     op.add_option("", "--no-debian", action="store_true", help="don't build the debian package")
     op.add_option("", "--no-rpm", action="store_true", help="don't build the rpm package")
@@ -445,13 +428,15 @@ def options():
 def main():
     o = options()
     _prepare_build_dir(o)
+    if not o.no_testing:
+        _prepare_testing(o)
     try:
         if not o.no_tarball:
             build_tgz(o)
             try:
                 if not o.no_testing:
                     test_tgz(o)
-                published_files = publish(o, 'tarball', ['odoo.tar.gz'])
+                published_files = publish(o, 'tarball', ['tar.gz', 'zip'])
             except Exception, e:
                 print("Won't publish the tgz release.\n Exception: %s" % str(e))
         if not o.no_debian:
@@ -459,13 +444,7 @@ def main():
             try:
                 if not o.no_testing:
                     test_deb(o)
-
-                to_publish = []
-                to_publish.append(glob("%s/odoo_*.deb" % o.build_dir)[0])
-                to_publish.append(glob("%s/odoo_*.dsc" % o.build_dir)[0])
-                to_publish.append(glob("%s/odoo_*.changes" % o.build_dir)[0])
-                to_publish.append(glob("%s/odoo_*.tar.gz" % o.build_dir)[0])
-                published_files = publish(o, 'debian', to_publish)
+                published_files = publish(o, 'debian', ['deb', 'dsc', 'changes', 'tar.gz'])
                 gen_deb_package(o, published_files)
             except Exception, e:
                 print("Won't publish the deb release.\n Exception: %s" % str(e))
@@ -474,16 +453,17 @@ def main():
             try:
                 if not o.no_testing:
                     test_rpm(o)
-                published_files = publish(o, 'redhat', ['odoo.noarch.rpm'])
+                published_files = publish(o, 'redhat', ['noarch.rpm'])
                 gen_rpm_repo(o, published_files[0])
             except Exception, e:
                 print("Won't publish the rpm release.\n Exception: %s" % str(e))
         if not o.no_windows:
+            _prepare_build_dir(o, win32=True)
             build_exe(o)
             try:
                 if not o.no_testing:
                     test_exe(o)
-                published_files = publish(o, 'windows', ['odoo.exe'])
+                published_files = publish(o, 'windows', ['exe'])
             except Exception, e:
                 print("Won't publish the exe release.\n Exception: %s" % str(e))
     except:

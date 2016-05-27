@@ -1,24 +1,5 @@
 # -*- coding: utf-8 -*-
-##############################################################################
-#
-#    OpenERP, Open Source Management Solution
-#    Copyright (C) 2004-2009 Tiny SPRL (<http://tiny.be>).
-#    Copyright (C) 2010-2014 OpenERP s.a. (<http://openerp.com>).
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU Affero General Public License as
-#    published by the Free Software Foundation, either version 3 of the
-#    License, or (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU Affero General Public License for more details.
-#
-#    You should have received a copy of the GNU Affero General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-##############################################################################
+# Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 """ Modules (also called addons) management.
 
@@ -36,13 +17,12 @@ import openerp.modules.db
 import openerp.modules.graph
 import openerp.modules.migration
 import openerp.modules.registry
-import openerp.osv as osv
 import openerp.tools as tools
 from openerp import SUPERUSER_ID
 
 from openerp.tools.translate import _
 from openerp.modules.module import initialize_sys_path, \
-    load_openerp_module, init_module_models, adapt_version
+    load_openerp_module, init_models, adapt_version
 from module import runs_post_install
 
 _logger = logging.getLogger(__name__)
@@ -124,31 +104,27 @@ def load_module_graph(cr, graph, status=None, perform_checks=True, skip_modules=
     loaded_modules = []
     registry = openerp.registry(cr.dbname)
     migrations = openerp.modules.migration.MigrationManager(cr, graph)
-    _logger.info('loading %d modules...', len(graph))
+    module_count = len(graph)
+    _logger.info('loading %d modules...', module_count)
 
-    # Query manual fields for all models at once and save them on the registry
-    # so the initialization code for each model does not have to do it
-    # one model at a time.
-    registry.fields_by_model = {}
-    cr.execute('SELECT * FROM ir_model_fields WHERE state=%s', ('manual',))
-    for field in cr.dictfetchall():
-        registry.fields_by_model.setdefault(field['model'], []).append(field)
+    registry.clear_manual_fields()
 
     # register, instantiate and initialize models for each modules
     t0 = time.time()
     t0_sql = openerp.sql_db.sql_counter
 
-    for index, package in enumerate(graph):
+    for index, package in enumerate(graph, 1):
         module_name = package.name
         module_id = package.id
 
         if skip_modules and module_name in skip_modules:
             continue
 
+        _logger.debug('loading module %s (%d/%d)', module_name, index, module_count)
         migrations.migrate_module(package, 'pre')
         load_openerp_module(package.name)
 
-        new_install = package.installed_version is None
+        new_install = package.state == 'to install'
         if new_install:
             py_module = sys.modules['openerp.addons.%s' % (module_name,)]
             pre_init = package.info.get('pre_init_hook')
@@ -160,14 +136,7 @@ def load_module_graph(cr, graph, status=None, perform_checks=True, skip_modules=
         loaded_modules.append(package.name)
         if hasattr(package, 'init') or hasattr(package, 'update') or package.state in ('to install', 'to upgrade'):
             registry.setup_models(cr, partial=True)
-            init_module_models(cr, package.name, models)
-
-        # Can't put this line out of the loop: ir.module.module will be
-        # registered by init_module_models() above.
-        modobj = registry['ir.module.module']
-
-        if perform_checks:
-            modobj.check(cr, SUPERUSER_ID, [module_id])
+            init_models(models, cr, {'module': package.name})
 
         idref = {}
 
@@ -176,6 +145,13 @@ def load_module_graph(cr, graph, status=None, perform_checks=True, skip_modules=
             mode = 'init'
 
         if hasattr(package, 'init') or hasattr(package, 'update') or package.state in ('to install', 'to upgrade'):
+            # Can't put this line out of the loop: ir.module.module will be
+            # registered by init_models() above.
+            modobj = registry['ir.module.module']
+
+            if perform_checks:
+                modobj.check(cr, SUPERUSER_ID, [module_id])
+
             if package.state=='to upgrade':
                 # upgrading the module information
                 modobj.write(cr, SUPERUSER_ID, [module_id], modobj.get_values_from_terp(package.data))
@@ -188,12 +164,16 @@ def load_module_graph(cr, graph, status=None, perform_checks=True, skip_modules=
 
             migrations.migrate_module(package, 'post')
 
+            # Update translations for all installed languages
+            modobj.update_translations(cr, SUPERUSER_ID, [module_id], None, {'overwrite': openerp.tools.config["overwrite_existing_translations"]})
+
+            registry._init_modules.add(package.name)
+
             if new_install:
                 post_init = package.info.get('post_init_hook')
                 if post_init:
                     getattr(py_module, post_init)(cr, registry)
 
-            registry._init_modules.add(package.name)
             # validate all the views at a whole
             registry['ir.ui.view']._validate_module_views(cr, SUPERUSER_ID, module_name)
 
@@ -214,8 +194,6 @@ def load_module_graph(cr, graph, status=None, perform_checks=True, skip_modules=
             ver = adapt_version(package.data['version'])
             # Set new modules and dependencies
             modobj.write(cr, SUPERUSER_ID, [module_id], {'state': 'installed', 'latest_version': ver})
-            # Update translations for all installed languages
-            modobj.update_translations(cr, SUPERUSER_ID, [module_id], None, {'overwrite': openerp.tools.config["overwrite_existing_translations"]})
 
             package.state = 'installed'
             for kind in ('init', 'demo', 'update'):
@@ -225,13 +203,9 @@ def load_module_graph(cr, graph, status=None, perform_checks=True, skip_modules=
         registry._init_modules.add(package.name)
         cr.commit()
 
-    registry.setup_models(cr, partial=True)
-
     _logger.log(25, "%s modules loaded in %.2fs, %s queries", len(graph), time.time() - t0, openerp.sql_db.sql_counter - t0_sql)
 
-    # The query won't be valid for models created later (i.e. custom model
-    # created after the registry has been loaded), so empty its result.
-    registry.fields_by_model = None
+    registry.clear_manual_fields()
 
     cr.commit()
 
@@ -258,12 +232,15 @@ def load_marked_modules(cr, graph, states, force, progressdict, report, loaded_m
     while True:
         cr.execute("SELECT name from ir_module_module WHERE state IN %s" ,(tuple(states),))
         module_list = [name for (name,) in cr.fetchall() if name not in graph]
+        if not module_list:
+            break
         graph.add_modules(cr, module_list, force)
         _logger.debug('Updating graph with %d more modules', len(module_list))
         loaded, processed = load_module_graph(cr, graph, progressdict, report=report, skip_modules=loaded_modules, perform_checks=perform_checks)
         processed_modules.extend(processed)
         loaded_modules.extend(loaded)
-        if not processed: break
+        if not processed:
+            break
     return processed_modules
 
 def load_modules(db, force_demo=False, status=None, update_module=False):
@@ -296,15 +273,20 @@ def load_modules(db, force_demo=False, status=None, update_module=False):
         graph.add_module(cr, 'base', force)
         if not graph:
             _logger.critical('module base cannot be loaded! (hint: verify addons-path)')
-            raise osv.osv.except_osv(_('Could not load base module'), _('module base cannot be loaded! (hint: verify addons-path)'))
+            raise ImportError('Module `base` cannot be loaded! (hint: verify addons-path)')
 
         # processed_modules: for cleanup step after install
         # loaded_modules: to avoid double loading
         report = registry._assertion_report
         loaded_modules, processed_modules = load_module_graph(cr, graph, status, perform_checks=update_module, report=report)
 
-        if tools.config['load_language']:
-            for lang in tools.config['load_language'].split(','):
+        load_lang = tools.config.pop('load_language')
+        if load_lang or update_module:
+            # some base models are used below, so make sure they are set up
+            registry.setup_models(cr, partial=True)
+
+        if load_lang:
+            for lang in load_lang.split(','):
                 tools.load_language(cr, lang)
 
         # STEP 2: Mark other modules to be loaded/updated
@@ -357,10 +339,6 @@ def load_modules(db, force_demo=False, status=None, update_module=False):
                     ['to install'], force, status, report,
                     loaded_modules, update_module)
 
-        # load custom models
-        cr.execute('select model from ir_model where state=%s', ('manual',))
-        for model in cr.dictfetchall():
-            registry['ir.model'].instanciate(cr, SUPERUSER_ID, model['model'], {})
         registry.setup_models(cr)
 
         # STEP 4: Finish and cleanup installations
@@ -368,7 +346,7 @@ def load_modules(db, force_demo=False, status=None, update_module=False):
             cr.execute("""select model,name from ir_model where id NOT IN (select distinct model_id from ir_model_access)""")
             for (model, name) in cr.fetchall():
                 if model in registry and not registry[model].is_transient() and not isinstance(registry[model], openerp.osv.orm.AbstractModel):
-                    _logger.warning('The model %s has no access rules, consider adding one. E.g. access_%s,access_%s,model_%s,,1,1,1,1',
+                    _logger.warning('The model %s has no access rules, consider adding one. E.g. access_%s,access_%s,model_%s,,1,0,0,0',
                         model, model.replace('.', '_'), model.replace('.', '_'), model.replace('.', '_'))
 
             # Temporary warning while we remove access rights on osv_memory objects, as they have
@@ -393,27 +371,7 @@ def load_modules(db, force_demo=False, status=None, update_module=False):
 
         cr.commit()
 
-        # STEP 5: Cleanup menus 
-        # Remove menu items that are not referenced by any of other
-        # (child) menu item, ir_values, or ir_model_data.
-        # TODO: This code could be a method of ir_ui_menu. Remove menu without actions of children
-        if update_module:
-            while True:
-                cr.execute('''delete from
-                        ir_ui_menu
-                    where
-                        (id not IN (select parent_id from ir_ui_menu where parent_id is not null))
-                    and
-                        (id not IN (select res_id from ir_values where model='ir.ui.menu'))
-                    and
-                        (id not IN (select res_id from ir_model_data where model='ir.ui.menu'))''')
-                cr.commit()
-                if not cr.rowcount:
-                    break
-                else:
-                    _logger.info('removed %d unused menus', cr.rowcount)
-
-        # STEP 6: Uninstall modules to remove
+        # STEP 5: Uninstall modules to remove
         if update_module:
             # Remove records referenced from ir_model_data for modules to be
             # removed (and removed the references from ir_model_data).
@@ -435,7 +393,7 @@ def load_modules(db, force_demo=False, status=None, update_module=False):
                 openerp.api.Environment.reset()
                 return openerp.modules.registry.RegistryManager.new(cr.dbname, force_demo, status, update_module)
 
-        # STEP 7: verify custom views on every model
+        # STEP 6: verify custom views on every model
         if update_module:
             Views = registry['ir.ui.view']
             custom_view_test = True
@@ -460,11 +418,12 @@ def load_modules(db, force_demo=False, status=None, update_module=False):
         t0 = time.time()
         t0_sql = openerp.sql_db.sql_counter
         if openerp.tools.config['test_enable']:
-            cr.execute("SELECT name FROM ir_module_module WHERE state='installed'")
+            if update_module:
+                cr.execute("SELECT name FROM ir_module_module WHERE state='installed' and name = ANY(%s)", (processed_modules,))
+            else:
+                cr.execute("SELECT name FROM ir_module_module WHERE state='installed'")
             for module_name in cr.fetchall():
                 report.record_result(openerp.modules.module.run_unit_tests(module_name[0], cr.dbname, position=runs_post_install))
             _logger.log(25, "All post-tested in %.2fs, %s queries", time.time() - t0, openerp.sql_db.sql_counter - t0_sql)
     finally:
         cr.close()
-
-# vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:
