@@ -27,7 +27,7 @@ class HrEmployee(models.Model):
     last_attendance_id = fields.Many2one('hr.attendance', compute='_compute_last_attendance_id')
     attendance_state = fields.Selection(string="Attendance", compute='_compute_attendance_state', selection=[('checked_out', "Checked out"), ('checked_in', "Checked in")])
     manual_attendance = fields.Boolean(string='Manual Attendance', compute='_compute_manual_attendance', inverse='_inverse_manual_attendance',
-                                       help='The employee will have access to the "My Attendances" menu to check in and out from his session')
+                                       help='The employee will have access to the "Check In/Out" menu to check in and out from his session')
 
     _sql_constraints = [('barcode_uniq', 'unique (barcode)', "The Badge ID must be unique, this one is already assigned to another employee.")]
 
@@ -83,7 +83,7 @@ class HrEmployee(models.Model):
     def attendance_action(self, next_action):
         """ Changes the attendance of the employee.
             Returns an action to the check in/out message,
-            next_action defines which menu the check in/out message should return to. ("My Attendances" or "Kiosk Mode")
+            next_action defines which menu the check in/out message should return to. ("Check In/Out" or "Kiosk Mode")
         """
         self.ensure_one()
         action_message = self.env.ref('hr_attendance.hr_attendance_action_greeting_message').read()[0]
