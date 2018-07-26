@@ -5,6 +5,7 @@
     'sequence': 145,
     'summary': 'Share and Publish Videos, Presentations and Documents',
     'category': 'Website',
+    'website': 'https://www.odoo.com/page/slides',
     'description': """
 Share and Publish Videos, Presentations and Documents'
 ======================================================
